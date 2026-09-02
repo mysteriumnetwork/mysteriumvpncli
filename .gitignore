@@ -1,0 +1,17 @@
+# Compiled binaries and test executables
+/mystvpn
+*.exe
+*.test
+
+# Build and coverage output
+*.out
+coverage.*
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
