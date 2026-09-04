@@ -40,10 +40,11 @@ type Client struct {
 	Debug      bool
 	Logger     *log.Logger
 
-	mu         sync.RWMutex
-	token      string
-	maxRetries int
-	retryDelay time.Duration
+	mu             sync.RWMutex
+	token          string
+	onUnauthorized func(context.Context) (string, error)
+	maxRetries     int
+	retryDelay     time.Duration
 }
 
 // New creates a Client configured with the supplied base URL and timeout.
@@ -78,39 +79,59 @@ func (c *Client) SetToken(token string) {
 	c.token = strings.TrimSpace(token)
 }
 
+// SetUnauthorizedHandler sets a callback that obtains a new bearer token after
+// a 401 response. The original request is repeated once with the returned token.
+func (c *Client) SetUnauthorizedHandler(handler func(context.Context) (string, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onUnauthorized = handler
+}
+
 // Get sends a GET request and decodes its JSON response into responseBody.
 func (c *Client) Get(ctx context.Context, endpoint string, responseBody any) error {
-	return c.do(ctx, http.MethodGet, endpoint, nil, responseBody)
+	_, err := c.do(ctx, http.MethodGet, endpoint, nil, responseBody)
+	return err
 }
 
 // Post sends a POST request with a JSON body and decodes its JSON response.
 func (c *Client) Post(ctx context.Context, endpoint string, requestBody, responseBody any) error {
+	_, err := c.do(ctx, http.MethodPost, endpoint, requestBody, responseBody)
+	return err
+}
+
+// PostWithStatus sends a POST request and also returns its HTTP status code.
+func (c *Client) PostWithStatus(ctx context.Context, endpoint string, requestBody, responseBody any) (int, error) {
 	return c.do(ctx, http.MethodPost, endpoint, requestBody, responseBody)
 }
 
 // Delete sends a DELETE request and decodes its JSON response into responseBody.
 func (c *Client) Delete(ctx context.Context, endpoint string, responseBody any) error {
-	return c.do(ctx, http.MethodDelete, endpoint, nil, responseBody)
+	_, err := c.do(ctx, http.MethodDelete, endpoint, nil, responseBody)
+	return err
 }
 
-func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, responseBody any) error {
+func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, responseBody any) (int, error) {
 	requestURL, err := c.resolveURL(endpoint)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	var encodedBody []byte
 	if requestBody != nil {
 		encodedBody, err = json.Marshal(requestBody)
 		if err != nil {
-			return fmt.Errorf("encode request body: %w", err)
+			return 0, fmt.Errorf("encode request body: %w", err)
 		}
 	}
 
-	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+	retryAttempt := 0
+	requestAttempt := 0
+	refreshed := false
+	for {
+		requestAttempt++
 		request, err := http.NewRequestWithContext(ctx, method, requestURL, bytes.NewReader(encodedBody))
 		if err != nil {
-			return fmt.Errorf("create request: %w", err)
+			return 0, fmt.Errorf("create request: %w", err)
 		}
 		request.Header.Set("Accept", "application/json")
 		if requestBody != nil {
@@ -120,46 +141,61 @@ func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, r
 			request.Header.Set("Authorization", "Bearer "+token)
 		}
 
-		c.debugf("%s %s (attempt %d)", method, requestURL, attempt+1)
+		c.debugf("%s %s (attempt %d)", method, requestURL, requestAttempt)
 		response, err := c.HTTPClient.Do(request)
 		if err != nil {
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return 0, ctx.Err()
 			}
-			if attempt < c.maxRetries {
-				if err := c.waitForRetry(ctx, attempt); err != nil {
-					return err
+			if retryAttempt < c.maxRetries {
+				if err := c.waitForRetry(ctx, retryAttempt); err != nil {
+					return 0, err
 				}
+				retryAttempt++
 				continue
 			}
-			return fmt.Errorf("send request: %w", err)
+			return 0, fmt.Errorf("send request: %w", err)
 		}
 
 		body, readErr := readResponseBody(response.Body)
 		if readErr != nil {
-			return readErr
+			return response.StatusCode, readErr
 		}
 		c.debugf("%s %s returned %s", method, requestURL, response.Status)
 
-		if shouldRetry(response.StatusCode) && attempt < c.maxRetries {
-			if err := c.waitForRetry(ctx, attempt); err != nil {
-				return err
+		if response.StatusCode == http.StatusUnauthorized && !refreshed {
+			if handler := c.unauthorizedHandler(); handler != nil {
+				token, err := handler(ctx)
+				if err != nil {
+					return response.StatusCode, fmt.Errorf("refresh authorization: %w", err)
+				}
+				if strings.TrimSpace(token) == "" {
+					return response.StatusCode, errors.New("refresh authorization: empty auth token")
+				}
+				c.SetToken(token)
+				refreshed = true
+				continue
 			}
+		}
+
+		if shouldRetry(response.StatusCode) && retryAttempt < c.maxRetries {
+			if err := c.waitForRetry(ctx, retryAttempt); err != nil {
+				return response.StatusCode, err
+			}
+			retryAttempt++
 			continue
 		}
 		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-			return newAPIError(response.StatusCode, body)
+			return response.StatusCode, newAPIError(response.StatusCode, body)
 		}
 		if responseBody == nil || len(body) == 0 {
-			return nil
+			return response.StatusCode, nil
 		}
 		if err := json.Unmarshal(body, responseBody); err != nil {
-			return fmt.Errorf("decode response body: %w", err)
+			return response.StatusCode, fmt.Errorf("decode response body: %w", err)
 		}
-		return nil
+		return response.StatusCode, nil
 	}
-
-	return errors.New("request attempts exhausted")
 }
 
 func (c *Client) resolveURL(endpoint string) (string, error) {
@@ -174,6 +210,12 @@ func (c *Client) bearerToken() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.token
+}
+
+func (c *Client) unauthorizedHandler() func(context.Context) (string, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.onUnauthorized
 }
 
 func (c *Client) waitForRetry(ctx context.Context, attempt int) error {

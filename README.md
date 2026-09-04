@@ -23,11 +23,18 @@ The command creates a `mystvpn` executable in the repository root.
 
 ```sh
 ./mystvpn
-./mystvpn --help
-./mystvpn --version
-./mystvpn --api-url https://api.example.com/api/v1 --debug status
+./mystvpn help
+./mystvpn version
+./mystvpn auth --username alice
+./mystvpn connect
+./mystvpn status
+./mystvpn logout
 ```
 
-The available command placeholders are `auth`, `countries`, `connect`,
-`refresh`, `status`, `disconnect`, and `logout`. They do not perform API,
-authentication, or VPN operations yet.
+The `auth` command signs in with a username and password and stores the returned
+tokens in owner-only files under the user's configuration directory. If
+`--password` is omitted, the command securely prompts for it when run in an
+interactive terminal. The `logout` command removes the stored tokens.
+
+The `countries`, `connect`, `refresh`, `status`, and `disconnect` commands remain
+placeholders and do not perform API or VPN operations yet.

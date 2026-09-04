@@ -2,36 +2,31 @@
 package config
 
 import (
-	"flag"
 	"time"
 )
 
 const (
-	DefaultAPIURL  = "https://api.example.com/api/v1"
-	DefaultTimeout = 30 * time.Second
+	DefaultAPIURL      = "https://api.example.com/api/v1"
+	DefaultSentinelURL = "https://sentinel.mysterium.network"
+	DefaultPool        = "default"
+	DefaultTimeout     = 30 * time.Second
 )
 
 // Config contains settings shared by CLI commands.
 type Config struct {
-	APIURL  string
-	Debug   bool
-	Timeout time.Duration
+	APIURL      string
+	SentinelURL string
+	Pool        string
+	Debug       bool
+	Timeout     time.Duration
 }
 
-// Load registers configuration flags on flags, parses args, and returns the
-// resulting configuration. Callers may register command-specific flags first.
-func Load(flags *flag.FlagSet, args []string) (Config, error) {
-	cfg := Config{
-		APIURL:  DefaultAPIURL,
-		Timeout: DefaultTimeout,
+// Load returns the application's built-in configuration.
+func Load() Config {
+	return Config{
+		APIURL:      DefaultAPIURL,
+		SentinelURL: DefaultSentinelURL,
+		Pool:        DefaultPool,
+		Timeout:     DefaultTimeout,
 	}
-
-	flags.StringVar(&cfg.APIURL, "api-url", cfg.APIURL, "base URL for the API")
-	flags.BoolVar(&cfg.Debug, "debug", false, "enable debug logging")
-
-	if err := flags.Parse(args); err != nil {
-		return Config{}, err
-	}
-
-	return cfg, nil
 }

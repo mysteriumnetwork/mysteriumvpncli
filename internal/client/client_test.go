@@ -153,6 +153,41 @@ func TestClientRetriesTransientResponses(t *testing.T) {
 	}
 }
 
+func TestClientRefreshesTokenAfterUnauthorized(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		attempts.Add(1)
+		if request.Header.Get("Authorization") != "Bearer refreshed-token" {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = writer.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	apiClient, err := New(server.URL, time.Second, false)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	apiClient.SetToken("expired-token")
+	apiClient.SetUnauthorizedHandler(func(context.Context) (string, error) {
+		return "refreshed-token", nil
+	})
+
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	if err := apiClient.Get(context.Background(), "/resource", &response); err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Errorf("attempts = %d, want 2", got)
+	}
+	if !response.OK {
+		t.Error("response OK = false, want true")
+	}
+}
+
 func TestShouldRetry(t *testing.T) {
 	tests := []struct {
 		statusCode int
