@@ -8,15 +8,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/auth"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/client"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/config"
+	"github.com/mysteriumnetwork/mysteriumvpncli/internal/proxy"
 	"golang.org/x/term"
 )
 
 var version = "dev"
+
+const countriesPerRow = 10
 
 var commands = []string{
 	"auth",
@@ -51,6 +55,8 @@ func runWithConfig(args []string, stdin *os.File, stdout, stderr io.Writer, cfg 
 	switch args[0] {
 	case "auth":
 		return runAuth(args[1:], cfg, stdin, stdout, stderr)
+	case "countries":
+		return runCountries(args[1:], cfg, stdout, stderr)
 	case "logout":
 		return runLogout(args[1:], stdout, stderr)
 	case "help":
@@ -82,6 +88,97 @@ func runWithConfig(args []string, stdin *os.File, stdout, stderr io.Writer, cfg 
 	}
 
 	return runCommand(args[0], apiClient, stdout)
+}
+
+func runCountries(args []string, cfg config.Config, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("countries", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	ipTypeValue := flags.String("ip-type", "", "IP address type")
+	flags.Usage = func() {}
+
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(stderr, `mystvpn countries: help flags are not supported; use "mystvpn help"`)
+		}
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintf(stderr, "mystvpn countries: unexpected argument %q\n", flags.Arg(0))
+		return 2
+	}
+	if *ipTypeValue == "" {
+		fmt.Fprintln(stderr, "mystvpn countries: --ip-type is required")
+		return 2
+	}
+	ipType, err := proxy.ParseIPType(*ipTypeValue)
+	if err != nil {
+		fmt.Fprintf(stderr, "mystvpn countries: %v\n", err)
+		return 2
+	}
+
+	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
+	if err != nil {
+		writeCountriesError(stderr, err)
+		return 1
+	}
+	authService, err := newAuthService(cfg)
+	if err != nil {
+		writeCountriesError(stderr, err)
+		return 1
+	}
+	if err := authService.ConfigureClient(apiClient); err != nil {
+		writeCountriesError(stderr, err)
+		return 1
+	}
+
+	connectionConfig, err := proxy.GetConnectionConfig(context.Background(), apiClient, ipType)
+	if err != nil {
+		writeCountriesError(stderr, err)
+		return 1
+	}
+	writeCountries(stdout, connectionConfig.Countries)
+	return 0
+}
+
+func writeCountries(output io.Writer, countries []string) {
+	sortedCountries := append([]string(nil), countries...)
+	sort.Strings(sortedCountries)
+
+	fmt.Fprintf(output, "Available countries (%d):\n", len(sortedCountries))
+	if len(sortedCountries) == 0 {
+		return
+	}
+	fmt.Fprintln(output)
+
+	for index, country := range sortedCountries {
+		if index > 0 {
+			if index%countriesPerRow == 0 {
+				fmt.Fprintln(output)
+			} else {
+				fmt.Fprint(output, "  ")
+			}
+		}
+		fmt.Fprint(output, country)
+	}
+	fmt.Fprintln(output)
+}
+
+func writeCountriesError(output io.Writer, err error) {
+	var authStatusErr *auth.HTTPStatusError
+	if errors.As(err, &authStatusErr) {
+		fmt.Fprintf(output, "mystvpn countries: HTTP status %d\n", authStatusErr.StatusCode)
+		return
+	}
+	var apiErr *client.APIError
+	if errors.As(err, &apiErr) {
+		fmt.Fprintf(output, "mystvpn countries: HTTP status %d\n", apiErr.StatusCode)
+		return
+	}
+	if errors.Is(err, auth.ErrTokenNotFound) {
+		fmt.Fprintln(output, `mystvpn countries: authentication required; run "mystvpn auth" first`)
+		return
+	}
+	fmt.Fprintln(output, "mystvpn countries: request failed")
 }
 
 func runAuth(args []string, cfg config.Config, stdin *os.File, stdout, stderr io.Writer) int {
@@ -218,6 +315,10 @@ func writeUsage(output io.Writer) {
 	for _, command := range commands {
 		if command == "auth" {
 			fmt.Fprintln(output, "  auth --username <name> [--password <value>]")
+			continue
+		}
+		if command == "countries" {
+			fmt.Fprintln(output, "  countries --ip-type <residential|hosting>")
 			continue
 		}
 		fmt.Fprintf(output, "  %s\n", command)
