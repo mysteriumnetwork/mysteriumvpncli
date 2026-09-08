@@ -67,6 +67,81 @@ func TestWriteConfigRequiresPlaceholder(t *testing.T) {
 	}
 }
 
+func TestUpdateAndRemoveManagedConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	directory, err := DefaultConfigDirectory()
+	if err != nil {
+		t.Fatalf("DefaultConfigDirectory() error = %v", err)
+	}
+	path, err := WriteConfig(directory, "[Interface]\nPrivateKey=%private_key%\nAddress=old\n", "private-value")
+	if err != nil {
+		t.Fatalf("WriteConfig() error = %v", err)
+	}
+
+	if err := UpdateConfig(path, "[Interface]\nPrivateKey=%private_key%\nAddress=new\n", "private-value"); err != nil {
+		t.Fatalf("UpdateConfig() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "Address=new") || strings.Contains(string(data), privateKeyPlaceholder) {
+		t.Errorf("updated config = %q", data)
+	}
+	assertMode(t, path, 0o600)
+
+	if err := RemoveConfig(path); err != nil {
+		t.Fatalf("RemoveConfig() error = %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("Stat() error = %v, want not exist", err)
+	}
+}
+
+func TestManagedConfigRejectsExternalPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	externalPath := filepath.Join(t.TempDir(), "mvpn-test.conf")
+	if err := os.WriteFile(externalPath, []byte("do not change"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := UpdateConfig(externalPath, "PrivateKey=%private_key%", "private-value"); err == nil {
+		t.Error("UpdateConfig() error = nil, want unmanaged-path error")
+	}
+	if err := RemoveConfig(externalPath); err == nil {
+		t.Error("RemoveConfig() error = nil, want unmanaged-path error")
+	}
+	data, err := os.ReadFile(externalPath)
+	if err != nil || string(data) != "do not change" {
+		t.Errorf("external file changed: data=%q error=%v", data, err)
+	}
+}
+
+func TestValidateConfigPathRejectsBroadPermissions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	directory, err := DefaultConfigDirectory()
+	if err != nil {
+		t.Fatalf("DefaultConfigDirectory() error = %v", err)
+	}
+	path, err := WriteConfig(directory, "PrivateKey=%private_key%", "private-value")
+	if err != nil {
+		t.Fatalf("WriteConfig() error = %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+
+	if err := ValidateConfigPath(path); err == nil {
+		t.Error("ValidateConfigPath() error = nil, want permissions error")
+	}
+}
+
 func assertMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 

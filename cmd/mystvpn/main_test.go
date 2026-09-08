@@ -68,26 +68,6 @@ func TestRunHelpListsCommands(t *testing.T) {
 	}
 }
 
-func TestRunPlaceholderCommands(t *testing.T) {
-	for _, command := range commands {
-		if command == "auth" || command == "countries" || command == "connect" || command == "logout" || command == "help" || command == "version" {
-			continue
-		}
-		t.Run(command, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-
-			exitCode := run([]string{command}, nil, &stdout, &stderr)
-
-			if exitCode != 0 {
-				t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
-			}
-			if got, want := stdout.String(), "mystvpn "+command+": not implemented yet\n"; got != want {
-				t.Errorf("stdout = %q, want %q", got, want)
-			}
-		})
-	}
-}
-
 func TestRunRejectsUnknownCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 

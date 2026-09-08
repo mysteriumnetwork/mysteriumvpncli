@@ -30,7 +30,9 @@ The command creates a `mystvpn` executable in the repository root.
 ./mystvpn countries --ip-type residential
 ./mystvpn countries --ip-type hosting
 ./mystvpn connect --country DE --ip-type residential
+./mystvpn refresh
 ./mystvpn status
+./mystvpn disconnect
 ./mystvpn logout
 ```
 
@@ -46,4 +48,8 @@ The `connect` command creates or reuses an app-owned WireGuard keypair, requests
 a connection, and immediately runs `wg-quick up`. It does not elevate privileges;
 run `mystvpn` with the permissions required by your system.
 
-The `refresh`, `status`, and `disconnect` commands remain placeholders.
+The `refresh` command reconnects with the active session's saved country, IP
+type, and WireGuard keypair. The `status` command reports the locally recorded
+connection metadata without making an API request. The `disconnect` command
+closes the remote connection by public key, runs `wg-quick down`, and removes
+the active session state and managed WireGuard config.

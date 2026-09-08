@@ -222,3 +222,7 @@ type tunnelRunnerFunc func(context.Context, string) error
 func (function tunnelRunnerFunc) Up(ctx context.Context, configPath string) error {
 	return function(ctx, configPath)
 }
+
+func (tunnelRunnerFunc) Down(context.Context, string) error {
+	return nil
+}

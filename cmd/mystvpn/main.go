@@ -62,6 +62,12 @@ func runWithConfig(args []string, stdin *os.File, stdout, stderr io.Writer, cfg 
 		return runCountries(args[1:], cfg, stdout, stderr)
 	case "connect":
 		return runConnect(args[1:], cfg, stdout, stderr, wireguard.WGQuickRunner{})
+	case "refresh":
+		return runRefresh(args[1:], cfg, stdout, stderr, wireguard.WGQuickRunner{})
+	case "status":
+		return runStatus(args[1:], stdout, stderr)
+	case "disconnect":
+		return runDisconnect(args[1:], cfg, stdout, stderr, wireguard.WGQuickRunner{})
 	case "logout":
 		return runLogout(args[1:], stdout, stderr)
 	case "help":
@@ -80,19 +86,7 @@ func runWithConfig(args []string, stdin *os.File, stdout, stderr io.Writer, cfg 
 		return 0
 	}
 
-	if len(args) > 1 {
-		fmt.Fprintf(stderr, "mystvpn: unexpected argument %q\n\n", args[1])
-		writeUsage(stderr)
-		return 2
-	}
-
-	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
-	if err != nil {
-		fmt.Fprintf(stderr, "mystvpn: %v\n", err)
-		return 2
-	}
-
-	return runCommand(args[0], apiClient, stdout)
+	return 2
 }
 
 func runConnect(args []string, cfg config.Config, stdout, stderr io.Writer, tunnelRunner wireguard.TunnelRunner) int {
@@ -212,22 +206,231 @@ func runConnect(args []string, cfg config.Config, stdout, stderr io.Writer, tunn
 	return 0
 }
 
-func writeConnectRequestError(output io.Writer, err error) {
+func runRefresh(args []string, cfg config.Config, stdout, stderr io.Writer, tunnelRunner wireguard.TunnelRunner) int {
+	if !acceptsNoArguments("refresh", args, stderr) {
+		return 2
+	}
+
+	sessionStore, err := state.NewDefaultStore()
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn refresh: could not initialize local session state")
+		return 1
+	}
+	session, err := sessionStore.Load()
+	if errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintln(stderr, "no active session")
+		return 1
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn refresh: could not load local session state")
+		return 1
+	}
+	if strings.TrimSpace(session.PublicKey) == "" || strings.TrimSpace(session.PrivateKey) == "" || strings.TrimSpace(session.Country) == "" {
+		fmt.Fprintln(stderr, "mystvpn refresh: invalid local session state")
+		return 1
+	}
+	ipType, err := proxy.ParseIPType(session.IPType)
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn refresh: invalid local session state")
+		return 1
+	}
+	if err := wireguard.ValidateConfigPath(session.ConfigPath); err != nil {
+		fmt.Fprintln(stderr, "mystvpn refresh: invalid local WireGuard config")
+		return 1
+	}
+
+	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn refresh: request failed")
+		return 1
+	}
+	authService, err := newAuthService(cfg)
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn refresh: authentication failed")
+		return 1
+	}
+	if err := authService.ConfigureClient(apiClient); err != nil {
+		writeSessionRequestError(stderr, "refresh", err)
+		return 1
+	}
+
+	response, err := proxy.Connect(context.Background(), apiClient, proxy.ConnectRequest{
+		PublicKey:       session.PublicKey,
+		Country:         session.Country,
+		IPType:          ipType,
+		ResetConnection: true,
+	})
+	if err != nil {
+		writeSessionRequestError(stderr, "refresh", err)
+		return 1
+	}
+
+	if err := tunnelRunner.Down(context.Background(), session.ConfigPath); err != nil {
+		fmt.Fprintf(stderr, "mystvpn refresh: %v\n", err)
+		return 1
+	}
+	if err := wireguard.UpdateConfig(session.ConfigPath, response.WGConfig, session.PrivateKey); err != nil {
+		clearSessionFiles(sessionStore, session.ConfigPath)
+		fmt.Fprintln(stderr, "mystvpn refresh: invalid WireGuard configuration")
+		return 1
+	}
+
+	updatedSession := state.Session{
+		SessionID:  response.ID,
+		PublicKey:  session.PublicKey,
+		PrivateKey: session.PrivateKey,
+		Country:    response.Country,
+		IPType:     string(response.IPType),
+		ExitIP:     response.ExitIP,
+		City:       response.City,
+		ConfigPath: session.ConfigPath,
+		Timestamp:  time.Now().UTC(),
+	}
+	if updatedSession.Country == "" {
+		updatedSession.Country = session.Country
+	}
+	if updatedSession.IPType == "" {
+		updatedSession.IPType = session.IPType
+	}
+	if err := sessionStore.Save(updatedSession); err != nil {
+		clearSessionFiles(sessionStore, session.ConfigPath)
+		fmt.Fprintln(stderr, "mystvpn refresh: could not save local session state")
+		return 1
+	}
+	if err := tunnelRunner.Up(context.Background(), session.ConfigPath); err != nil {
+		clearSessionFiles(sessionStore, session.ConfigPath)
+		fmt.Fprintf(stderr, "mystvpn refresh: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "exit_ip: %s\n", updatedSession.ExitIP)
+	fmt.Fprintf(stdout, "country: %s\n", updatedSession.Country)
+	fmt.Fprintf(stdout, "city: %s\n", updatedSession.City)
+	return 0
+}
+
+func runStatus(args []string, stdout, stderr io.Writer) int {
+	if !acceptsNoArguments("status", args, stderr) {
+		return 2
+	}
+
+	sessionStore, err := state.NewDefaultStore()
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn status: could not initialize local session state")
+		return 1
+	}
+	session, err := sessionStore.Load()
+	if errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintln(stdout, "connected: no")
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn status: could not load local session state")
+		return 1
+	}
+
+	fmt.Fprintln(stdout, "connected: yes")
+	fmt.Fprintf(stdout, "IP address: %s\n", session.ExitIP)
+	fmt.Fprintf(stdout, "country: %s\n", session.Country)
+	fmt.Fprintf(stdout, "city: %s\n", session.City)
+	return 0
+}
+
+func runDisconnect(args []string, cfg config.Config, stdout, stderr io.Writer, tunnelRunner wireguard.TunnelRunner) int {
+	if !acceptsNoArguments("disconnect", args, stderr) {
+		return 2
+	}
+
+	sessionStore, err := state.NewDefaultStore()
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn disconnect: could not initialize local session state")
+		return 1
+	}
+	session, err := sessionStore.Load()
+	if errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintln(stderr, "no active session")
+		return 1
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn disconnect: could not load local session state")
+		return 1
+	}
+	if strings.TrimSpace(session.PublicKey) == "" {
+		fmt.Fprintln(stderr, "mystvpn disconnect: invalid local session state")
+		return 1
+	}
+	if err := wireguard.ValidateConfigPath(session.ConfigPath); err != nil {
+		fmt.Fprintln(stderr, "mystvpn disconnect: invalid local WireGuard config")
+		return 1
+	}
+
+	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn disconnect: request failed")
+		return 1
+	}
+	authService, err := newAuthService(cfg)
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn disconnect: authentication failed")
+		return 1
+	}
+	if err := authService.ConfigureClient(apiClient); err != nil {
+		writeSessionRequestError(stderr, "disconnect", err)
+		return 1
+	}
+	if err := proxy.Disconnect(context.Background(), apiClient, session.PublicKey); err != nil {
+		writeSessionRequestError(stderr, "disconnect", err)
+		return 1
+	}
+	if err := tunnelRunner.Down(context.Background(), session.ConfigPath); err != nil {
+		fmt.Fprintf(stderr, "mystvpn disconnect: %v\n", err)
+		return 1
+	}
+
+	removeErr := wireguard.RemoveConfig(session.ConfigPath)
+	clearErr := sessionStore.Clear()
+	if removeErr != nil || clearErr != nil {
+		fmt.Fprintln(stderr, "mystvpn disconnect: could not clear local session state")
+		return 1
+	}
+
+	fmt.Fprintln(stdout, "Disconnected successfully")
+	return 0
+}
+
+func acceptsNoArguments(command string, args []string, stderr io.Writer) bool {
+	if len(args) == 0 {
+		return true
+	}
+	fmt.Fprintf(stderr, "mystvpn %s: unexpected argument %q\n", command, args[0])
+	return false
+}
+
+func clearSessionFiles(sessionStore *state.Store, configPath string) {
+	_ = sessionStore.Clear()
+	_ = wireguard.RemoveConfig(configPath)
+}
+
+func writeSessionRequestError(output io.Writer, command string, err error) {
 	var authStatusErr *auth.HTTPStatusError
 	if errors.As(err, &authStatusErr) {
-		fmt.Fprintf(output, "mystvpn connect: HTTP status %d\n", authStatusErr.StatusCode)
+		fmt.Fprintf(output, "mystvpn %s: HTTP status %d\n", command, authStatusErr.StatusCode)
 		return
 	}
 	var apiErr *client.APIError
 	if errors.As(err, &apiErr) {
-		fmt.Fprintf(output, "mystvpn connect: HTTP status %d\n", apiErr.StatusCode)
+		fmt.Fprintf(output, "mystvpn %s: HTTP status %d\n", command, apiErr.StatusCode)
 		return
 	}
 	if errors.Is(err, auth.ErrTokenNotFound) {
-		fmt.Fprintln(output, `mystvpn connect: authentication required; run "mystvpn auth" first`)
+		fmt.Fprintf(output, "mystvpn %s: authentication required; run \"mystvpn auth\" first\n", command)
 		return
 	}
-	fmt.Fprintln(output, "mystvpn connect: request failed")
+	fmt.Fprintf(output, "mystvpn %s: request failed\n", command)
+}
+
+func writeConnectRequestError(output io.Writer, err error) {
+	writeSessionRequestError(output, "connect", err)
 }
 
 func runCountries(args []string, cfg config.Config, stdout, stderr io.Writer) int {
@@ -429,11 +632,6 @@ func promptPassword(stdin *os.File, output io.Writer) (string, error) {
 		return "", fmt.Errorf("read password: %w", err)
 	}
 	return string(password), nil
-}
-
-func runCommand(name string, _ *client.Client, stdout io.Writer) int {
-	fmt.Fprintf(stdout, "mystvpn %s: not implemented yet\n", name)
-	return 0
 }
 
 func isCommand(name string) bool {
