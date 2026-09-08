@@ -10,11 +10,14 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/auth"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/client"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/config"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/proxy"
+	"github.com/mysteriumnetwork/mysteriumvpncli/internal/state"
+	"github.com/mysteriumnetwork/mysteriumvpncli/internal/wireguard"
 	"golang.org/x/term"
 )
 
@@ -57,6 +60,8 @@ func runWithConfig(args []string, stdin *os.File, stdout, stderr io.Writer, cfg 
 		return runAuth(args[1:], cfg, stdin, stdout, stderr)
 	case "countries":
 		return runCountries(args[1:], cfg, stdout, stderr)
+	case "connect":
+		return runConnect(args[1:], cfg, stdout, stderr, wireguard.WGQuickRunner{})
 	case "logout":
 		return runLogout(args[1:], stdout, stderr)
 	case "help":
@@ -88,6 +93,141 @@ func runWithConfig(args []string, stdin *os.File, stdout, stderr io.Writer, cfg 
 	}
 
 	return runCommand(args[0], apiClient, stdout)
+}
+
+func runConnect(args []string, cfg config.Config, stdout, stderr io.Writer, tunnelRunner wireguard.TunnelRunner) int {
+	flags := flag.NewFlagSet("connect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	countryValue := flags.String("country", "", "country code")
+	ipTypeValue := flags.String("ip-type", "", "IP address type")
+	flags.Usage = func() {}
+
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(stderr, `mystvpn connect: help flags are not supported; use "mystvpn help"`)
+		}
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintf(stderr, "mystvpn connect: unexpected argument %q\n", flags.Arg(0))
+		return 2
+	}
+	country := strings.ToUpper(strings.TrimSpace(*countryValue))
+	if country == "" {
+		fmt.Fprintln(stderr, "mystvpn connect: --country is required")
+		return 2
+	}
+	if *ipTypeValue == "" {
+		fmt.Fprintln(stderr, "mystvpn connect: --ip-type is required")
+		return 2
+	}
+	ipType, err := proxy.ParseIPType(*ipTypeValue)
+	if err != nil {
+		fmt.Fprintf(stderr, "mystvpn connect: %v\n", err)
+		return 2
+	}
+
+	keyStore, err := wireguard.NewDefaultKeyStore()
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn connect: could not initialize WireGuard key storage")
+		return 1
+	}
+	keyPair, err := keyStore.LoadOrCreate()
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn connect: could not prepare WireGuard keypair")
+		return 1
+	}
+
+	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn connect: request failed")
+		return 1
+	}
+	authService, err := newAuthService(cfg)
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn connect: authentication failed")
+		return 1
+	}
+	if err := authService.ConfigureClient(apiClient); err != nil {
+		writeConnectRequestError(stderr, err)
+		return 1
+	}
+
+	response, err := proxy.Connect(context.Background(), apiClient, proxy.ConnectRequest{
+		PublicKey:       keyPair.PublicKey,
+		Country:         country,
+		IPType:          ipType,
+		ResetConnection: true,
+	})
+	if err != nil {
+		writeConnectRequestError(stderr, err)
+		return 1
+	}
+
+	configDirectory, err := wireguard.DefaultConfigDirectory()
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn connect: could not initialize WireGuard config storage")
+		return 1
+	}
+	configPath, err := wireguard.WriteConfig(configDirectory, response.WGConfig, keyPair.PrivateKey)
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn connect: invalid WireGuard configuration")
+		return 1
+	}
+
+	sessionStore, err := state.NewDefaultStore()
+	if err != nil {
+		os.Remove(configPath)
+		fmt.Fprintln(stderr, "mystvpn connect: could not initialize local session state")
+		return 1
+	}
+	session := state.Session{
+		SessionID:  response.ID,
+		PublicKey:  keyPair.PublicKey,
+		PrivateKey: keyPair.PrivateKey,
+		Country:    response.Country,
+		IPType:     string(ipType),
+		ExitIP:     response.ExitIP,
+		City:       response.City,
+		ConfigPath: configPath,
+		Timestamp:  time.Now().UTC(),
+	}
+	if err := sessionStore.Save(session); err != nil {
+		os.Remove(configPath)
+		fmt.Fprintln(stderr, "mystvpn connect: could not save local session state")
+		return 1
+	}
+
+	if err := tunnelRunner.Up(context.Background(), configPath); err != nil {
+		sessionStore.Clear()
+		os.Remove(configPath)
+		fmt.Fprintf(stderr, "mystvpn connect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, "Connected successfully")
+	fmt.Fprintf(stdout, "exit_ip: %s\n", response.ExitIP)
+	fmt.Fprintf(stdout, "country: %s\n", response.Country)
+	fmt.Fprintf(stdout, "city: %s\n", response.City)
+	return 0
+}
+
+func writeConnectRequestError(output io.Writer, err error) {
+	var authStatusErr *auth.HTTPStatusError
+	if errors.As(err, &authStatusErr) {
+		fmt.Fprintf(output, "mystvpn connect: HTTP status %d\n", authStatusErr.StatusCode)
+		return
+	}
+	var apiErr *client.APIError
+	if errors.As(err, &apiErr) {
+		fmt.Fprintf(output, "mystvpn connect: HTTP status %d\n", apiErr.StatusCode)
+		return
+	}
+	if errors.Is(err, auth.ErrTokenNotFound) {
+		fmt.Fprintln(output, `mystvpn connect: authentication required; run "mystvpn auth" first`)
+		return
+	}
+	fmt.Fprintln(output, "mystvpn connect: request failed")
 }
 
 func runCountries(args []string, cfg config.Config, stdout, stderr io.Writer) int {
@@ -319,6 +459,10 @@ func writeUsage(output io.Writer) {
 		}
 		if command == "countries" {
 			fmt.Fprintln(output, "  countries --ip-type <residential|hosting>")
+			continue
+		}
+		if command == "connect" {
+			fmt.Fprintln(output, "  connect --country <code> --ip-type <residential|hosting>")
 			continue
 		}
 		fmt.Fprintf(output, "  %s\n", command)

@@ -70,7 +70,7 @@ func TestRunHelpListsCommands(t *testing.T) {
 
 func TestRunPlaceholderCommands(t *testing.T) {
 	for _, command := range commands {
-		if command == "auth" || command == "countries" || command == "logout" || command == "help" || command == "version" {
+		if command == "auth" || command == "countries" || command == "connect" || command == "logout" || command == "help" || command == "version" {
 			continue
 		}
 		t.Run(command, func(t *testing.T) {

@@ -2,13 +2,13 @@
 
 `mystvpn` is a command-line client for Mysterium VPN on Linux.
 
-This repository currently contains the early MVP command structure,
-authentication, and country discovery. VPN connection and WireGuard support are
-not implemented yet.
+This repository contains the early MVP command structure, authentication,
+country discovery, and WireGuard connection flow.
 
 ## Requirements
 
 - Go 1.27 or later
+- `wg-quick` for establishing WireGuard connections
 
 ## Build
 
@@ -29,7 +29,7 @@ The command creates a `mystvpn` executable in the repository root.
 ./mystvpn auth --username alice
 ./mystvpn countries --ip-type residential
 ./mystvpn countries --ip-type hosting
-./mystvpn connect
+./mystvpn connect --country DE --ip-type residential
 ./mystvpn status
 ./mystvpn logout
 ```
@@ -40,5 +40,10 @@ tokens in owner-only files under the user's configuration directory. If
 interactive terminal. The `logout` command removes the stored tokens.
 
 The `countries` command prints the available country codes alphabetically, with
-up to ten codes per line. The `connect`, `refresh`, `status`, and `disconnect`
-commands remain placeholders and do not perform VPN operations yet.
+up to ten codes per line.
+
+The `connect` command creates or reuses an app-owned WireGuard keypair, requests
+a connection, and immediately runs `wg-quick up`. It does not elevate privileges;
+run `mystvpn` with the permissions required by your system.
+
+The `refresh`, `status`, and `disconnect` commands remain placeholders.
