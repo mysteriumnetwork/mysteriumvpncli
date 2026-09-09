@@ -19,8 +19,8 @@ func TestLoginSendsSentinelRequestAndStoresTokens(t *testing.T) {
 		if request.Method != http.MethodPost {
 			t.Errorf("method = %s, want POST", request.Method)
 		}
-		if request.URL.Path != passwordAuthEndpoint {
-			t.Errorf("path = %q, want %q", request.URL.Path, passwordAuthEndpoint)
+		if request.URL.Path != "/api/v1/auth/password" {
+			t.Errorf("path = %q, want /api/v1/auth/password", request.URL.Path)
 		}
 
 		var body map[string]string
@@ -105,8 +105,8 @@ func TestConfiguredClientRefreshesAndReplacesStoredTokens(t *testing.T) {
 	var refreshCalls atomic.Int32
 	sentinel := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		refreshCalls.Add(1)
-		if request.URL.Path != refreshTokenEndpoint {
-			t.Errorf("path = %q, want %q", request.URL.Path, refreshTokenEndpoint)
+		if request.URL.Path != "/api/v1/token/refresh" {
+			t.Errorf("path = %q, want /api/v1/token/refresh", request.URL.Path)
 		}
 		var body refreshRequest
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
@@ -160,7 +160,7 @@ func TestConfiguredClientRefreshesAndReplacesStoredTokens(t *testing.T) {
 func newTestService(t *testing.T, sentinelURL string, store TokenStore, pool string) *Service {
 	t.Helper()
 
-	sentinelClient, err := client.New(sentinelURL, time.Second, false)
+	sentinelClient, err := client.New(sentinelURL+"/api/v1", time.Second, false)
 	if err != nil {
 		t.Fatalf("client.New() error = %v", err)
 	}

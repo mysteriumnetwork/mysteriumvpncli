@@ -42,7 +42,7 @@ func TestRunConnect(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		requestedPublicKey = body.PublicKey
-		if body.Country != "DE" || body.IPType != proxy.IPTypeResidential || !body.ResetConnection {
+		if body.Country != "DE" || body.IPType != proxy.IPTypeResidential || body.OSType != proxy.OSTypeLinux || !body.ResetConnection {
 			t.Errorf("request body = %+v, want normalized connect parameters", body)
 		}
 
@@ -92,7 +92,7 @@ func TestRunConnect(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("runConnect() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	wantOutput := "Connected successfully\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n"
+	wantOutput := "exit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n"
 	if stdout.String() != wantOutput {
 		t.Errorf("stdout = %q, want %q", stdout.String(), wantOutput)
 	}
@@ -132,6 +132,7 @@ func TestRunConnectValidatesFlags(t *testing.T) {
 		wantText string
 	}{
 		{name: "missing country", args: []string{"--ip-type", "residential"}, wantText: "--country is required"},
+		{name: "invalid country", args: []string{"--country", "Germany", "--ip-type", "residential"}, wantText: "country must be a two-letter code"},
 		{name: "missing ip type", args: []string{"--country", "DE"}, wantText: "--ip-type is required"},
 		{name: "invalid ip type", args: []string{"--country", "DE", "--ip-type", "mobile"}, wantText: `ip type must be "residential" or "hosting"`},
 	}

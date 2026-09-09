@@ -86,6 +86,13 @@ func (s *Store) Save(session Session) error {
 
 // Load reads the current session.
 func (s *Store) Load() (Session, error) {
+	info, err := os.Lstat(s.path)
+	if err != nil {
+		return Session{}, fmt.Errorf("inspect session state: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return Session{}, errors.New("session state is not an owner-only regular file")
+	}
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		return Session{}, fmt.Errorf("read session state: %w", err)

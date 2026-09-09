@@ -37,6 +37,21 @@ func TestKeyStoreReusesKeyPair(t *testing.T) {
 	assertMode(t, path, 0o600)
 }
 
+func TestKeyStoreRejectsBroadKeyPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wireguard", "keypair.json")
+	store := NewKeyStore(path)
+	if _, err := store.LoadOrCreate(); err != nil {
+		t.Fatalf("LoadOrCreate() error = %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+
+	if _, err := store.LoadOrCreate(); err == nil {
+		t.Error("LoadOrCreate() error = nil, want permissions error")
+	}
+}
+
 func TestWriteConfigReplacesPrivateKeySecurely(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "configs")
 	template := "[Interface]\nPrivateKey=%private_key%\nAddress=10.10.0.2/24\n"

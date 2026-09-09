@@ -1,55 +1,145 @@
 # mystvpn
 
-`mystvpn` is a command-line client for Mysterium VPN on Linux.
+`mystvpn` is a Linux command-line client for connecting to Mysterium VPN with
+WireGuard.
 
-This repository contains the early MVP command structure, authentication,
-country discovery, and WireGuard connection flow.
+The MVP supports username/password authentication, country discovery,
+connection establishment, refresh, local status, disconnect, and logout.
 
 ## Requirements
 
-- Go 1.27 or later
-- `wg-quick` for establishing WireGuard connections
+- Go 1.27 or later to build from source
+- `wg-quick` installed on the target Linux system
+- Permission to create and remove WireGuard interfaces
+
+`mystvpn` does not elevate privileges automatically. Run all commands that use
+persisted credentials or connection state under the same operating-system user.
 
 ## Build
 
-From the repository root, run:
+From the repository root:
 
 ```sh
 go build ./cmd/mystvpn
 ```
 
-The command creates a `mystvpn` executable in the repository root.
+This creates a `mystvpn` executable in the repository root.
 
 ## Usage
 
 ```sh
-./mystvpn
 ./mystvpn help
 ./mystvpn version
+
 ./mystvpn auth --username alice
 ./mystvpn countries --ip-type residential
-./mystvpn countries --ip-type hosting
 ./mystvpn connect --country DE --ip-type residential
-./mystvpn refresh
 ./mystvpn status
+./mystvpn refresh
 ./mystvpn disconnect
 ./mystvpn logout
 ```
 
-The `auth` command signs in with a username and password and stores the returned
-tokens in owner-only files under the user's configuration directory. If
-`--password` is omitted, the command securely prompts for it when run in an
-interactive terminal. The `logout` command removes the stored tokens.
+Running `mystvpn` without a command also prints the command overview.
 
-The `countries` command prints the available country codes alphabetically, with
-up to ten codes per line.
+### Authentication
 
-The `connect` command creates or reuses an app-owned WireGuard keypair, requests
-a connection, and immediately runs `wg-quick up`. It does not elevate privileges;
-run `mystvpn` with the permissions required by your system.
+```sh
+./mystvpn auth --username alice
+```
 
-The `refresh` command reconnects with the active session's saved country, IP
-type, and WireGuard keypair. The `status` command reports the locally recorded
-connection metadata without making an API request. The `disconnect` command
-closes the remote connection by public key, runs `wg-quick down`, and removes
-the active session state and managed WireGuard config.
+When run interactively, the command securely prompts for the password. A
+password can be supplied explicitly for non-interactive use:
+
+```sh
+./mystvpn auth --username alice --password secret
+```
+
+The explicit form can expose the password through shell history or process
+inspection, so the interactive prompt is preferred.
+
+### Countries
+
+```sh
+./mystvpn countries --ip-type residential
+./mystvpn countries --ip-type hosting
+```
+
+The command prints available two-letter country codes alphabetically, with up
+to ten codes per line.
+
+### Connect
+
+```sh
+./mystvpn connect --country DE --ip-type residential
+```
+
+Both flags are required. The IP type must be `residential` or `hosting`, and the
+country must be a two-letter code. The command creates or reuses the app-owned
+WireGuard keypair, requests a configuration, and runs `wg-quick up`.
+
+If a connection is already active, `connect` replaces it using the saved
+WireGuard keypair. It requests the new configuration before bringing the
+existing tunnel down, updates the managed configuration at the same path, and
+then brings the tunnel back up. An explicit remote disconnect is not required
+for this replacement flow.
+
+Successful output contains only connection metadata:
+
+```text
+exit_ip: 1.2.3.4
+country: DE
+city: berlin
+```
+
+### Active session
+
+`mystvpn status` reads local state without making an API request:
+
+```text
+connected: yes
+IP address: 1.2.3.4
+country: DE
+city: berlin
+```
+
+When there is no active session it prints `connected: no`.
+
+`mystvpn refresh` reconnects using the active session's saved country, IP type,
+and WireGuard keypair. It replaces the managed configuration at the same path,
+brings the tunnel back up, and prints the new connection metadata.
+
+`mystvpn disconnect` closes the remote connection using the saved public key,
+runs `wg-quick down`, removes the managed WireGuard configuration, and clears
+the active session state.
+
+### Logout
+
+```sh
+./mystvpn logout
+```
+
+If a tunnel is active, logout disconnects it locally and remotely before
+removing the locally stored authentication and refresh tokens.
+
+## Security
+
+- Authentication tokens are stored in owner-only files in the current user's
+  configuration directory.
+- The app-owned WireGuard keypair, active session, and generated WireGuard
+  configuration are stored with owner-only permissions.
+- WireGuard private keys and authentication tokens are never included in normal
+  command output or debug HTTP logs.
+- The generated WireGuard configuration contains the private key and should not
+  be copied or made accessible to other users.
+- Only WireGuard configuration paths managed by `mystvpn` are accepted by the
+  refresh and disconnect commands.
+
+## Tests
+
+```sh
+go test ./...
+```
+
+The test suite uses local mock APIs and a fake WireGuard runner. It does not
+contact external services or modify real network interfaces.

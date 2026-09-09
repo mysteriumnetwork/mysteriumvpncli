@@ -27,7 +27,7 @@ func TestConnect(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body.PublicKey != "public-value" || body.Country != "DE" || body.IPType != IPTypeResidential || !body.ResetConnection {
+		if body.PublicKey != "public-value" || body.Country != "DE" || body.IPType != IPTypeResidential || body.OSType != OSTypeLinux || !body.ResetConnection {
 			t.Errorf("request body = %+v, want connect parameters", body)
 		}
 
@@ -56,6 +56,7 @@ func TestConnect(t *testing.T) {
 		PublicKey:       "public-value",
 		Country:         "DE",
 		IPType:          IPTypeResidential,
+		OSType:          OSTypeLinux,
 		ResetConnection: true,
 	})
 	if err != nil {

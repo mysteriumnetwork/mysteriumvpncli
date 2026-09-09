@@ -109,8 +109,8 @@ func TestRunAuth(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body["username"] != "alice" || body["password"] != "secret" || body["pool"] != "default" {
-			t.Errorf("request body = %v, want credentials and default pool", body)
+		if body["username"] != "alice" || body["password"] != "secret" || body["pool"] != "dvpn" {
+			t.Errorf("request body = %v, want credentials and dvpn pool", body)
 		}
 		_, _ = writer.Write([]byte(`{"auth_token":"auth-value","refresh_token":"refresh-value"}`))
 	}))
@@ -118,7 +118,7 @@ func TestRunAuth(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
-	cfg.SentinelURL = server.URL
+	cfg.SentinelURL = server.URL + "/api/v1"
 	exitCode := runWithConfig(
 		[]string{"auth", "--username", "alice", "--password", "secret"},
 		nil,
@@ -171,7 +171,7 @@ func TestRunAuthReportsOnlyHTTPStatus(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
-	cfg.SentinelURL = server.URL
+	cfg.SentinelURL = server.URL + "/api/v1"
 	exitCode := runWithConfig(
 		[]string{"auth", "--username", "alice", "--password", "wrong"},
 		nil,
@@ -397,7 +397,7 @@ func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 
 	cfg := config.Load()
 	cfg.APIURL = apiServer.URL
-	cfg.SentinelURL = authServer.URL
+	cfg.SentinelURL = authServer.URL + "/api/v1"
 	var stdout, stderr bytes.Buffer
 	exitCode := runWithConfig(
 		[]string{"countries", "--ip-type", "residential"},

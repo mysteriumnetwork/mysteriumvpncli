@@ -6,13 +6,18 @@ import (
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/client"
 )
 
-const connectEndpoint = "/connection/connect"
+const (
+	connectEndpoint = "/connection/connect"
+	// OSTypeLinux identifies Linux clients in connection requests.
+	OSTypeLinux = "linux"
+)
 
 // ConnectRequest contains the parameters required to create a proxy connection.
 type ConnectRequest struct {
 	PublicKey       string `json:"public_key"`
 	Country         string `json:"country"`
 	IPType          IPType `json:"ip_type"`
+	OSType          string `json:"os_type"`
 	ResetConnection bool   `json:"reset_connection"`
 }
 

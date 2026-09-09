@@ -3,11 +3,22 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/client"
 )
+
+// ParseCountry normalizes and validates an ISO-style two-letter country code.
+func ParseCountry(value string) (string, error) {
+	country := strings.ToUpper(strings.TrimSpace(value))
+	if len(country) != 2 || country[0] < 'A' || country[0] > 'Z' || country[1] < 'A' || country[1] > 'Z' {
+		return "", errors.New("country must be a two-letter code")
+	}
+	return country, nil
+}
 
 const connectionConfigEndpoint = "/connection/config"
 

@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	passwordAuthEndpoint = "/api/v1/auth/password"
-	refreshTokenEndpoint = "/api/v1/token/refresh"
+	passwordAuthEndpoint = "/auth/password"
+	refreshTokenEndpoint = "/token/refresh"
 )
 
 // HTTPStatusError reports an unsuccessful Sentinel response without exposing

@@ -27,6 +27,31 @@ func TestParseIPType(t *testing.T) {
 	}
 }
 
+func TestParseCountry(t *testing.T) {
+	tests := []struct {
+		value string
+		want  string
+		valid bool
+	}{
+		{value: "de", want: "DE", valid: true},
+		{value: " CA ", want: "CA", valid: true},
+		{value: "", valid: false},
+		{value: "D", valid: false},
+		{value: "DEU", valid: false},
+		{value: "D1", valid: false},
+	}
+
+	for _, test := range tests {
+		got, err := ParseCountry(test.value)
+		if test.valid && (err != nil || got != test.want) {
+			t.Errorf("ParseCountry(%q) = %q, %v; want %q", test.value, got, err, test.want)
+		}
+		if !test.valid && err == nil {
+			t.Errorf("ParseCountry(%q) error = nil", test.value)
+		}
+	}
+}
+
 func TestGetConnectionConfig(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {

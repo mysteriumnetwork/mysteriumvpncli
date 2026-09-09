@@ -35,7 +35,7 @@ func TestRunRefresh(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body.PublicKey != original.PublicKey || body.Country != original.Country || string(body.IPType) != original.IPType || !body.ResetConnection {
+		if body.PublicKey != original.PublicKey || body.Country != original.Country || string(body.IPType) != original.IPType || body.OSType != proxy.OSTypeLinux || !body.ResetConnection {
 			t.Errorf("request body = %+v, want saved session context", body)
 		}
 		_, _ = writer.Write([]byte(`{

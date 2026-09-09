@@ -82,6 +82,13 @@ func generateKeyPair() (KeyPair, error) {
 }
 
 func (s *KeyStore) load() (KeyPair, error) {
+	info, err := os.Lstat(s.path)
+	if err != nil {
+		return KeyPair{}, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return KeyPair{}, errors.New("stored WireGuard keypair is not an owner-only regular file")
+	}
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		return KeyPair{}, err

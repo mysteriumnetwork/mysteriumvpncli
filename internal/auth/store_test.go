@@ -48,6 +48,21 @@ func TestFileStoreTokenLifecycle(t *testing.T) {
 	}
 }
 
+func TestFileStoreRejectsBroadTokenPermissions(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "credentials")
+	store := NewFileStore(directory)
+	if err := store.SaveAuthToken("auth-value"); err != nil {
+		t.Fatalf("SaveAuthToken() error = %v", err)
+	}
+	if err := os.Chmod(filepath.Join(directory, authTokenFile), 0o644); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+
+	if _, err := store.LoadAuthToken(); err == nil {
+		t.Error("LoadAuthToken() error = nil, want permissions error")
+	}
+}
+
 func assertPermissions(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 

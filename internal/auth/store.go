@@ -127,10 +127,18 @@ func (s *FileStore) load(name string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	token, err := os.ReadFile(filepath.Join(s.directory, name))
+	path := filepath.Join(s.directory, name)
+	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", ErrTokenNotFound
 	}
+	if err != nil {
+		return "", fmt.Errorf("inspect %s: %w", name, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("%s is not an owner-only regular file", name)
+	}
+	token, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", name, err)
 	}

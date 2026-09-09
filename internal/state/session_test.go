@@ -45,6 +45,21 @@ func TestStoreSessionLifecycle(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsBroadSessionPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mystvpn", "session.json")
+	store := NewStore(path)
+	if err := store.Save(Session{PrivateKey: "private-value"}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+
+	if _, err := store.Load(); err == nil {
+		t.Error("Load() error = nil, want permissions error")
+	}
+}
+
 func assertPermissions(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 

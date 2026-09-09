@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	DefaultAPIURL      = "https://api.example.com/api/v1"
-	DefaultSentinelURL = "https://sentinel.mysterium.network"
-	DefaultPool        = "default"
+	DefaultAPIURL      = "https://api.mysteriumvpn.com/api/v1"
+	DefaultSentinelURL = "https://sentinel.mysterium.network/api/v1"
+	DefaultPool        = "dvpn"
 	DefaultTimeout     = 30 * time.Second
 )
 
