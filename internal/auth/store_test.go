@@ -68,13 +68,14 @@ func TestFileStorePendingAuthLifecycle(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "credentials")
 	store := NewFileStore(directory)
 	pending := PendingAuth{
-		Email:         "alice@example.com",
-		State:         "state-value",
-		Nonce:         "nonce-value",
-		CodeVerifier:  "verifier-value",
-		CodeChallenge: "challenge-value",
-		CallbackURL:   "http://127.0.0.1:53682/auth/callback",
-		ExpiresAt:     time.Date(2026, time.September, 25, 10, 10, 0, 0, time.UTC),
+		Email:             "alice@example.com",
+		State:             "state-value",
+		Nonce:             "nonce-value",
+		CodeVerifier:      "verifier-value",
+		CodeChallenge:     "challenge-value",
+		CallbackURL:       "http://127.0.0.1:53682/auth/callback",
+		AuthorizationCode: "authorization-code",
+		ExpiresAt:         time.Date(2026, time.September, 25, 10, 10, 0, 0, time.UTC),
 	}
 
 	if err := store.SavePendingAuth(pending); err != nil {

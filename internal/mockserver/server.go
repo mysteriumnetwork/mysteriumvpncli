@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/proxy"
@@ -107,7 +108,7 @@ func (s *Server) Snapshot() Snapshot {
 
 func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch request.URL.Path {
-	case "/api/v1/auth/magic-link":
+	case "/api/v1/magic-link":
 		s.handleAuth(writer, request)
 	case "/api/v1/token/refresh":
 		s.handleTokenRefresh(writer, request)
@@ -129,14 +130,12 @@ func (s *Server) handleAuth(writer http.ResponseWriter, request *http.Request) {
 	}
 	var body struct {
 		Email               string `json:"email"`
-		State               string `json:"state"`
-		Nonce               string `json:"nonce"`
+		ClientID            string `json:"client_id"`
 		CodeChallenge       string `json:"code_challenge"`
 		CodeChallengeMethod string `json:"code_challenge_method"`
-		CallbackURL         string `json:"callback_url"`
-		Pool                string `json:"pool"`
+		ContinueTo          string `json:"continue_to"`
 	}
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Email == "" || body.State == "" || body.Nonce == "" || body.CodeChallenge == "" || body.CodeChallengeMethod != "S256" || body.CallbackURL == "" || body.Pool == "" {
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Email == "" || body.ClientID == "" || body.CodeChallenge == "" || body.CodeChallengeMethod != "S256" || body.ContinueTo == "" {
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -150,6 +149,21 @@ func (s *Server) handleAuth(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writer.WriteHeader(http.StatusAccepted)
+	go sendAuthCallback(body.ContinueTo)
+}
+
+func sendAuthCallback(continueTo string) {
+	callbackURL, err := url.Parse(continueTo)
+	if err != nil {
+		return
+	}
+	query := callbackURL.Query()
+	query.Set("code", "test-authorization-code")
+	callbackURL.RawQuery = query.Encode()
+	response, err := http.Get(callbackURL.String())
+	if err == nil {
+		response.Body.Close()
+	}
 }
 
 func (s *Server) handleTokenRefresh(writer http.ResponseWriter, request *http.Request) {

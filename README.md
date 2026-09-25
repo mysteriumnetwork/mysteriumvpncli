@@ -48,9 +48,11 @@ Running `mystvpn` without a command also prints the command overview.
 ./mystvpn auth --email alice@example.com
 ```
 
-The command requests a magic link and securely stores the short-lived state,
-nonce, and PKCE verifier needed to complete authentication. Browser callback
-handling is not part of this foundation commit and will be added separately.
+The command requests a magic link, starts a temporary listener on a random
+IPv4 loopback port, and waits briefly for the browser redirect. It validates
+the callback state and nonce, then securely stores the authorization code and
+PKCE verifier for token exchange. Paste-code fallback and token exchange are
+not part of this commit.
 
 ### Countries
 

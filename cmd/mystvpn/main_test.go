@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/auth"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/client"
@@ -102,31 +104,31 @@ func TestRunAuth(t *testing.T) {
 	configureTestHome(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v1/auth/magic-link" {
+		if request.URL.Path != "/api/v1/magic-link" {
 			t.Errorf("path = %q, want magic-link auth endpoint", request.URL.Path)
 		}
 		var body map[string]string
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body["email"] != "alice@example.com" || body["pool"] != "dvpn" || body["callback_url"] != config.DefaultAuthCallbackURL {
-			t.Errorf("request body = %v, want email, callback URL, and dvpn pool", body)
+		if body["email"] != "alice@example.com" || body["client_id"] != "dvpn" || body["continue_to"] == "" {
+			t.Errorf("request body = %v, want email, client ID, and continue URL", body)
 		}
-		for _, field := range []string{"state", "nonce", "code_challenge"} {
-			if body[field] == "" {
-				t.Errorf("request body is missing %s", field)
-			}
+		if body["code_challenge"] == "" {
+			t.Error("request body is missing code_challenge")
 		}
 		if body["code_challenge_method"] != "S256" {
 			t.Errorf("code challenge method = %q, want S256", body["code_challenge_method"])
 		}
 		writer.WriteHeader(http.StatusAccepted)
+		go sendTestAuthCallback(body["continue_to"])
 	}))
 	defer server.Close()
 
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
 	cfg.SentinelURL = server.URL + "/api/v1"
+	cfg.AuthCallbackTimeout = 2 * time.Second
 	exitCode := runWithConfig(
 		[]string{"auth", "--email", "alice@example.com"},
 		nil,
@@ -138,7 +140,7 @@ func TestRunAuth(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	if stdout.String() != "Authentication link sent. Check your email.\n" {
+	if stdout.String() != "Authentication link sent. Check your email.\nAuthentication callback received.\n" {
 		t.Errorf("stdout = %q, want success message", stdout.String())
 	}
 	store, err := auth.NewDefaultFileStore()
@@ -149,8 +151,8 @@ func TestRunAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadPendingAuth() error = %v", err)
 	}
-	if pending.Email != "alice@example.com" || pending.CodeVerifier == "" || pending.ExpiresAt.IsZero() {
-		t.Errorf("pending auth = %+v, want email, verifier, and expiry", pending)
+	if pending.Email != "alice@example.com" || pending.CodeVerifier == "" || pending.AuthorizationCode != "test-authorization-code" || pending.ExpiresAt.IsZero() {
+		t.Errorf("pending auth = %+v, want email, verifier, authorization code, and expiry", pending)
 	}
 	if _, err := store.LoadAccessToken(); !errors.Is(err, auth.ErrTokenNotFound) {
 		t.Errorf("LoadAccessToken() error = %v, want no token before callback completion", err)
@@ -492,6 +494,20 @@ func TestRunLogoutClearsTokens(t *testing.T) {
 	}
 	if _, err := store.LoadRefreshToken(); !errors.Is(err, auth.ErrTokenNotFound) {
 		t.Errorf("LoadRefreshToken() error = %v, want ErrTokenNotFound", err)
+	}
+}
+
+func sendTestAuthCallback(continueTo string) {
+	callbackURL, err := url.Parse(continueTo)
+	if err != nil {
+		return
+	}
+	query := callbackURL.Query()
+	query.Set("code", "test-authorization-code")
+	callbackURL.RawQuery = query.Encode()
+	response, err := http.Get(callbackURL.String())
+	if err == nil {
+		response.Body.Close()
 	}
 }
 

@@ -14,11 +14,11 @@ func TestLoadDefaults(t *testing.T) {
 	if DefaultSentinelURL != "https://sentinel.mysterium.network/api/v1" {
 		t.Errorf("DefaultSentinelURL = %q", DefaultSentinelURL)
 	}
-	if DefaultPool != "dvpn" {
-		t.Errorf("DefaultPool = %q", DefaultPool)
+	if DefaultAuthClientID != "dvpn" {
+		t.Errorf("DefaultAuthClientID = %q", DefaultAuthClientID)
 	}
-	if DefaultAuthCallbackURL != "http://127.0.0.1:53682/auth/callback" {
-		t.Errorf("DefaultAuthCallbackURL = %q", DefaultAuthCallbackURL)
+	if DefaultAuthCallbackTimeout != 2*time.Minute {
+		t.Errorf("DefaultAuthCallbackTimeout = %v", DefaultAuthCallbackTimeout)
 	}
 	if DefaultPendingAuthTTL != 10*time.Minute {
 		t.Errorf("DefaultPendingAuthTTL = %v", DefaultPendingAuthTTL)
@@ -29,11 +29,11 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.SentinelURL != DefaultSentinelURL {
 		t.Errorf("SentinelURL = %q, want %q", cfg.SentinelURL, DefaultSentinelURL)
 	}
-	if cfg.Pool != DefaultPool {
-		t.Errorf("Pool = %q, want %q", cfg.Pool, DefaultPool)
+	if cfg.AuthClientID != DefaultAuthClientID {
+		t.Errorf("AuthClientID = %q, want %q", cfg.AuthClientID, DefaultAuthClientID)
 	}
-	if cfg.AuthCallbackURL != DefaultAuthCallbackURL {
-		t.Errorf("AuthCallbackURL = %q, want %q", cfg.AuthCallbackURL, DefaultAuthCallbackURL)
+	if cfg.AuthCallbackTimeout != DefaultAuthCallbackTimeout {
+		t.Errorf("AuthCallbackTimeout = %v, want %v", cfg.AuthCallbackTimeout, DefaultAuthCallbackTimeout)
 	}
 	if cfg.PendingAuthTTL != DefaultPendingAuthTTL {
 		t.Errorf("PendingAuthTTL = %v, want %v", cfg.PendingAuthTTL, DefaultPendingAuthTTL)

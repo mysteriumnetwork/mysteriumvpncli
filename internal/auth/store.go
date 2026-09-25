@@ -28,13 +28,14 @@ var (
 // PendingAuth contains the protected local state required to complete a
 // magic-link PKCE exchange.
 type PendingAuth struct {
-	Email         string    `json:"email"`
-	State         string    `json:"state"`
-	Nonce         string    `json:"nonce"`
-	CodeVerifier  string    `json:"code_verifier"`
-	CodeChallenge string    `json:"code_challenge"`
-	CallbackURL   string    `json:"callback_url"`
-	ExpiresAt     time.Time `json:"expires_at"`
+	Email             string    `json:"email"`
+	State             string    `json:"state"`
+	Nonce             string    `json:"nonce"`
+	CodeVerifier      string    `json:"code_verifier"`
+	CodeChallenge     string    `json:"code_challenge"`
+	CallbackURL       string    `json:"callback_url"`
+	AuthorizationCode string    `json:"authorization_code,omitempty"`
+	ExpiresAt         time.Time `json:"expires_at"`
 }
 
 // CredentialStore persists tokens and pending magic-link authentication state.

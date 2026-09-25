@@ -7,7 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -539,18 +542,61 @@ func runAuth(args []string, cfg config.Config, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "mystvpn auth: --email is required")
 		return 2
 	}
+	if cfg.AuthCallbackTimeout <= 0 {
+		fmt.Fprintln(stderr, "mystvpn auth: invalid callback timeout")
+		return 1
+	}
+
+	callback, err := auth.NewLoopbackCallback()
+	if err != nil {
+		fmt.Fprintln(stderr, "mystvpn auth: could not start local callback listener")
+		return 1
+	}
+	defer callback.Close()
 
 	service, err := newAuthService(cfg)
 	if err != nil {
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
-	if _, err := service.Start(context.Background(), *email); err != nil {
+	result, err := service.Start(context.Background(), *email, callback.URL())
+	if err != nil {
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
 
 	fmt.Fprintln(stdout, "Authentication link sent. Check your email.")
+	if result.AuthURL != "" {
+		authURL, err := validateAuthenticationURL(result.AuthURL)
+		if err != nil {
+			_ = service.Cancel()
+			fmt.Fprintln(stderr, "mystvpn auth: invalid authentication URL")
+			return 1
+		}
+		if err := openBrowser(authURL); err != nil {
+			fmt.Fprintf(stdout, "Open this URL to continue: %s\n", authURL)
+		}
+	}
+
+	callbackContext, cancel := context.WithTimeout(context.Background(), cfg.AuthCallbackTimeout)
+	defer cancel()
+	callbackResult, err := callback.Wait(callbackContext, result.Pending.State, result.Pending.Nonce)
+	if err != nil {
+		_ = service.Cancel()
+		if errors.Is(err, context.DeadlineExceeded) {
+			fmt.Fprintln(stderr, "mystvpn auth: authentication timed out")
+		} else {
+			fmt.Fprintln(stderr, "mystvpn auth: browser callback failed")
+		}
+		return 1
+	}
+	if err := service.CompleteCallback(callbackResult); err != nil {
+		_ = service.Cancel()
+		writeAuthenticationError(stderr, err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, "Authentication callback received.")
 	return 0
 }
 
@@ -611,10 +657,28 @@ func newAuthService(cfg config.Config) (*auth.Service, error) {
 		return nil, err
 	}
 	return auth.NewService(sentinelClient, store, auth.Options{
-		Pool:           cfg.Pool,
-		CallbackURL:    cfg.AuthCallbackURL,
+		ClientID:       cfg.AuthClientID,
 		PendingAuthTTL: cfg.PendingAuthTTL,
 	}), nil
+}
+
+func openBrowser(rawURL string) error {
+	command := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		command = "open"
+	}
+	if err := exec.Command(command, rawURL).Start(); err != nil {
+		return fmt.Errorf("open browser: %w", err)
+	}
+	return nil
+}
+
+func validateAuthenticationURL(rawURL string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return "", errors.New("invalid authentication URL")
+	}
+	return parsed.String(), nil
 }
 
 func isCommand(name string) bool {

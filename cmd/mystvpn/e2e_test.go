@@ -38,7 +38,7 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	}
 
 	assertCommandResult(t, execute("status"), 0, "connected: no\n", "")
-	assertCommandResult(t, execute("auth", "--email", "alice@example.com"), 0, "Authentication link sent. Check your email.\n", "")
+	assertCommandResult(t, execute("auth", "--email", "alice@example.com"), 0, "Authentication link sent. Check your email.\nAuthentication callback received.\n", "")
 	saveEndToEndTokens(t)
 
 	credentialsDirectory := filepath.Join(testConfigDirectory(t), "mystvpn", "credentials")
@@ -141,7 +141,7 @@ func TestCLIConnectReplacesActiveSession(t *testing.T) {
 	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\n", "")
+	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication callback received.\n", "")
 	saveEndToEndTokens(t)
 	assertCommandResult(
 		t,
@@ -194,7 +194,7 @@ func TestCLILogoutDisconnectsActiveSession(t *testing.T) {
 	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\n", "")
+	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication callback received.\n", "")
 	saveEndToEndTokens(t)
 	assertCommandResult(
 		t,
@@ -254,7 +254,7 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\n", "")
+	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication callback received.\n", "")
 	saveEndToEndTokens(t)
 
 	server.SetConnectStatus(http.StatusForbidden)

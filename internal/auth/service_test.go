@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -49,40 +50,50 @@ func TestStartSendsMagicLinkRequestAndStoresPendingAuth(t *testing.T) {
 		if request.Method != http.MethodPost {
 			t.Errorf("method = %s, want POST", request.Method)
 		}
-		if request.URL.Path != "/api/v1/auth/magic-link" {
-			t.Errorf("path = %q, want /api/v1/auth/magic-link", request.URL.Path)
+		if request.URL.Path != "/api/v1/magic-link" {
+			t.Errorf("path = %q, want /api/v1/magic-link", request.URL.Path)
 		}
 		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
+		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusAccepted)
+		_, _ = writer.Write([]byte(`{"auth_url":"https://auth.example.com/continue"}`))
 	}))
 	defer server.Close()
 
 	store := &memoryCredentialStore{}
 	service := newTestService(t, server.URL, store)
 	service.now = func() time.Time { return fixedNow }
-	pending, err := service.Start(context.Background(), "alice@example.com")
+	result, err := service.Start(context.Background(), "alice@example.com", "http://127.0.0.1:54321/auth/callback")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	if requestBody.Email != "alice@example.com" || requestBody.Pool != "dvpn" {
+	if requestBody.Email != "alice@example.com" || requestBody.ClientID != "dvpn" {
 		t.Errorf("request identity = %+v", requestBody)
 	}
-	if requestBody.CallbackURL != "http://127.0.0.1:53682/auth/callback" {
-		t.Errorf("callback URL = %q", requestBody.CallbackURL)
+	if result.AuthURL != "https://auth.example.com/continue" {
+		t.Errorf("auth URL = %q", result.AuthURL)
 	}
-	if requestBody.State == "" || requestBody.Nonce == "" || requestBody.CodeChallenge == "" {
+	if requestBody.CodeChallenge == "" {
 		t.Errorf("request is missing generated security fields: %+v", requestBody)
 	}
 	if requestBody.CodeChallengeMethod != "S256" {
 		t.Errorf("challenge method = %q, want S256", requestBody.CodeChallengeMethod)
 	}
+	pending := result.Pending
 	if pending.CodeVerifier == "" || pending.CodeVerifier == pending.CodeChallenge {
 		t.Error("pending auth does not contain a distinct PKCE verifier")
 	}
-	if pending.State != requestBody.State || pending.Nonce != requestBody.Nonce || pending.CodeChallenge != requestBody.CodeChallenge {
+	continueTo, err := url.Parse(requestBody.ContinueTo)
+	if err != nil {
+		t.Fatalf("parse continue_to: %v", err)
+	}
+	if continueTo.Scheme != "http" || continueTo.Host != "127.0.0.1:54321" || continueTo.Path != "/auth/callback" {
+		t.Errorf("continue_to = %q, want loopback callback", requestBody.ContinueTo)
+	}
+	if continueTo.Query().Get("state") != pending.State || continueTo.Query().Get("nonce") != pending.Nonce || pending.CodeChallenge != requestBody.CodeChallenge {
 		t.Error("stored pending auth does not match start request")
 	}
 	if want := fixedNow.Add(10 * time.Minute); !pending.ExpiresAt.Equal(want) {
@@ -103,7 +114,7 @@ func TestStartFailureClearsPendingAuthAndReportsStatusOnly(t *testing.T) {
 
 	store := &memoryCredentialStore{}
 	service := newTestService(t, server.URL, store)
-	_, err := service.Start(context.Background(), "alice@example.com")
+	_, err := service.Start(context.Background(), "alice@example.com", "http://127.0.0.1:54321/auth/callback")
 	var statusErr *HTTPStatusError
 	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("Start() error = %v, want HTTP status 429", err)
@@ -113,6 +124,29 @@ func TestStartFailureClearsPendingAuthAndReportsStatusOnly(t *testing.T) {
 	}
 	if _, err := store.LoadPendingAuth(); !errors.Is(err, ErrPendingAuthNotFound) {
 		t.Errorf("LoadPendingAuth() error = %v, want cleared state", err)
+	}
+}
+
+func TestCompleteCallbackStoresAuthorizationCode(t *testing.T) {
+	pending := testPendingAuth()
+	store := &memoryCredentialStore{pending: &pending}
+	service := newTestService(t, "http://127.0.0.1:1", store)
+	service.now = func() time.Time { return pending.ExpiresAt.Add(-time.Minute) }
+
+	err := service.CompleteCallback(CallbackResult{
+		AuthorizationCode: "authorization-code",
+		State:             pending.State,
+		Nonce:             pending.Nonce,
+	})
+	if err != nil {
+		t.Fatalf("CompleteCallback() error = %v", err)
+	}
+	stored, err := store.LoadPendingAuth()
+	if err != nil {
+		t.Fatalf("LoadPendingAuth() error = %v", err)
+	}
+	if stored.AuthorizationCode != "authorization-code" {
+		t.Errorf("authorization code = %q, want saved code", stored.AuthorizationCode)
 	}
 }
 
@@ -222,8 +256,7 @@ func newTestService(t *testing.T, authURL string, store CredentialStore) *Servic
 		t.Fatalf("client.New() error = %v", err)
 	}
 	return NewService(authClient, store, Options{
-		Pool:           "dvpn",
-		CallbackURL:    "http://127.0.0.1:53682/auth/callback",
+		ClientID:       "dvpn",
 		PendingAuthTTL: 10 * time.Minute,
 	})
 }
