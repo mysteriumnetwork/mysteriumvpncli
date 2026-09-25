@@ -19,6 +19,7 @@ type Config struct {
 	APIURL              string
 	SentinelURL         string
 	AuthClientID        string
+	AuthDevice          string
 	AuthCallbackTimeout time.Duration
 	PendingAuthTTL      time.Duration
 	Debug               bool
@@ -31,6 +32,7 @@ func Load() Config {
 		APIURL:              DefaultAPIURL,
 		SentinelURL:         DefaultSentinelURL,
 		AuthClientID:        DefaultAuthClientID,
+		AuthDevice:          "",
 		AuthCallbackTimeout: DefaultAuthCallbackTimeout,
 		PendingAuthTTL:      DefaultPendingAuthTTL,
 		Timeout:             DefaultTimeout,

@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	startAuthEndpoint     = "/magic-link"
-	tokenExchangeEndpoint = "/auth/token"
-	refreshTokenEndpoint  = "/token/refresh"
-	codeChallengeMethod   = "S256"
+	startAuthEndpoint   = "/magic-link"
+	tokenEndpoint       = "/oauth/token"
+	codeChallengeMethod = "S256"
+	authorizationGrant  = "authorization_code"
+	refreshTokenGrant   = "refresh_token"
 )
 
 // ErrPendingAuthExpired indicates that an authorization code belongs to an
@@ -42,6 +43,7 @@ func (e *HTTPStatusError) Error() string {
 // Options configures the magic-link authentication contract.
 type Options struct {
 	ClientID       string
+	Device         string
 	PendingAuthTTL time.Duration
 }
 
@@ -131,7 +133,7 @@ func (s *Service) Start(ctx context.Context, email, callbackURL string) (StartRe
 }
 
 // CompleteCallback validates a loopback callback and stores its authorization
-// code for the token-exchange commit that follows this one.
+// code until it can be exchanged for tokens.
 func (s *Service) CompleteCallback(callback CallbackResult) error {
 	pending, err := s.store.LoadPendingAuth()
 	if err != nil {
@@ -163,11 +165,11 @@ func (s *Service) Cancel() error {
 	return nil
 }
 
-// Exchange exchanges an authorization code for an access and refresh token.
-// The browser callback flow intentionally does not call it in this commit.
-func (s *Service) Exchange(ctx context.Context, authorizationCode, state string) error {
-	if strings.TrimSpace(authorizationCode) == "" {
-		return errors.New("authorization code must not be empty")
+// Exchange exchanges the completed pending authorization for an access and
+// refresh token.
+func (s *Service) Exchange(ctx context.Context) error {
+	if strings.TrimSpace(s.options.ClientID) == "" {
+		return errors.New("authentication client ID must not be empty")
 	}
 	pending, err := s.store.LoadPendingAuth()
 	if err != nil {
@@ -177,17 +179,19 @@ func (s *Service) Exchange(ctx context.Context, authorizationCode, state string)
 		_ = s.store.ClearPendingAuth()
 		return ErrPendingAuthExpired
 	}
-	if subtle.ConstantTimeCompare([]byte(state), []byte(pending.State)) != 1 {
-		return errors.New("authentication state does not match")
+	if strings.TrimSpace(pending.AuthorizationCode) == "" {
+		return errors.New("pending authentication does not contain an authorization code")
 	}
 
-	request := tokenExchangeRequest{
-		AuthorizationCode: authorizationCode,
-		CodeVerifier:      pending.CodeVerifier,
-		CallbackURL:       pending.CallbackURL,
+	request := tokenRequest{
+		GrantType:    authorizationGrant,
+		Code:         pending.AuthorizationCode,
+		ClientID:     s.options.ClientID,
+		CodeVerifier: pending.CodeVerifier,
+		Device:       s.options.Device,
 	}
-	var tokens tokenResponse
-	statusCode, err := s.client.PostWithStatus(ctx, tokenExchangeEndpoint, request, &tokens)
+	var tokens TokenResponse
+	statusCode, err := s.client.PostWithStatus(ctx, tokenEndpoint, request, &tokens)
 	if err := authError(statusCode, err); err != nil {
 		return err
 	}
@@ -206,14 +210,21 @@ func (s *Service) Exchange(ctx context.Context, authorizationCode, state string)
 // Refresh exchanges the stored refresh token for a new token pair and returns
 // the new access token.
 func (s *Service) Refresh(ctx context.Context) (string, error) {
+	if strings.TrimSpace(s.options.ClientID) == "" {
+		return "", errors.New("authentication client ID must not be empty")
+	}
 	refreshToken, err := s.store.LoadRefreshToken()
 	if err != nil {
 		return "", fmt.Errorf("load refresh token: %w", err)
 	}
 
-	request := refreshRequest{RefreshToken: refreshToken}
-	var tokens tokenResponse
-	statusCode, err := s.client.PostWithStatus(ctx, refreshTokenEndpoint, request, &tokens)
+	request := tokenRequest{
+		GrantType:    refreshTokenGrant,
+		RefreshToken: refreshToken,
+		ClientID:     s.options.ClientID,
+	}
+	var tokens TokenResponse
+	statusCode, err := s.client.PostWithStatus(ctx, tokenEndpoint, request, &tokens)
 	if err := authError(statusCode, err); err != nil {
 		return "", err
 	}
@@ -277,7 +288,7 @@ func callbackURLWithSecurityValues(callbackURL, state, nonce string) (string, er
 	return parsed.String(), nil
 }
 
-func (s *Service) saveTokens(tokens tokenResponse) error {
+func (s *Service) saveTokens(tokens TokenResponse) error {
 	if err := s.store.SaveAccessToken(tokens.AccessToken); err != nil {
 		return fmt.Errorf("save access token: %w", err)
 	}
@@ -301,9 +312,15 @@ func authError(statusCode int, err error) error {
 	return err
 }
 
-func validateTokenResponse(tokens tokenResponse) error {
-	if tokens.AccessToken == "" || tokens.RefreshToken == "" {
+func validateTokenResponse(tokens TokenResponse) error {
+	if strings.TrimSpace(tokens.AccessToken) == "" || strings.TrimSpace(tokens.RefreshToken) == "" {
 		return errors.New("authentication response did not contain both tokens")
+	}
+	if !strings.EqualFold(strings.TrimSpace(tokens.TokenType), "Bearer") {
+		return errors.New("authentication response contained an unsupported token type")
+	}
+	if tokens.ExpiresIn <= 0 {
+		return errors.New("authentication response contained an invalid expiry")
 	}
 	return nil
 }
@@ -328,17 +345,21 @@ func (r startAuthResponse) URL() string {
 	return r.URLValue
 }
 
-type tokenExchangeRequest struct {
-	AuthorizationCode string `json:"code"`
-	CodeVerifier      string `json:"code_verifier"`
-	CallbackURL       string `json:"callback_url"`
+type tokenRequest struct {
+	GrantType    string `json:"grant_type"`
+	Code         string `json:"code,omitempty"`
+	ClientID     string `json:"client_id"`
+	CodeVerifier string `json:"code_verifier,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Device       string `json:"device,omitempty"`
 }
 
-type refreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
-}
-
-type tokenResponse struct {
+// TokenResponse is the OAuth token payload returned for authorization-code
+// and refresh-token grants.
+type TokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	UserID       string `json:"user_id,omitempty"`
 }

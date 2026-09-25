@@ -32,6 +32,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.AuthClientID != DefaultAuthClientID {
 		t.Errorf("AuthClientID = %q, want %q", cfg.AuthClientID, DefaultAuthClientID)
 	}
+	if cfg.AuthDevice != "" {
+		t.Errorf("AuthDevice = %q, want empty optional device", cfg.AuthDevice)
+	}
 	if cfg.AuthCallbackTimeout != DefaultAuthCallbackTimeout {
 		t.Errorf("AuthCallbackTimeout = %v, want %v", cfg.AuthCallbackTimeout, DefaultAuthCallbackTimeout)
 	}

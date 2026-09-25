@@ -38,8 +38,7 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	}
 
 	assertCommandResult(t, execute("status"), 0, "connected: no\n", "")
-	assertCommandResult(t, execute("auth", "--email", "alice@example.com"), 0, "Authentication link sent. Check your email.\nAuthentication callback received.\n", "")
-	saveEndToEndTokens(t)
+	assertCommandResult(t, execute("auth", "--email", "alice@example.com"), 0, "Authentication link sent. Check your email.\nAuthentication successful.\n", "")
 
 	credentialsDirectory := filepath.Join(testConfigDirectory(t), "mystvpn", "credentials")
 	assertFileMode(t, filepath.Join(credentialsDirectory, "access_token"), 0o600)
@@ -100,8 +99,8 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	}
 
 	snapshot := server.Snapshot()
-	if snapshot.AuthCalls != 1 || snapshot.TokenRefreshCalls != 1 || len(snapshot.CountryQueries) != 1 {
-		t.Errorf("mock calls = %+v, want one auth, token refresh, and countries call", snapshot)
+	if snapshot.AuthCalls != 1 || snapshot.TokenExchangeCalls != 1 || snapshot.TokenRefreshCalls != 1 || len(snapshot.CountryQueries) != 1 {
+		t.Errorf("mock calls = %+v, want one auth, token exchange, token refresh, and countries call", snapshot)
 	}
 	if len(snapshot.ConnectRequests) != 2 {
 		t.Fatalf("connect requests = %d, want 2", len(snapshot.ConnectRequests))
@@ -141,8 +140,7 @@ func TestCLIConnectReplacesActiveSession(t *testing.T) {
 	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication callback received.\n", "")
-	saveEndToEndTokens(t)
+	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication successful.\n", "")
 	assertCommandResult(
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "residential"}, cfg, runner),
@@ -194,8 +192,7 @@ func TestCLILogoutDisconnectsActiveSession(t *testing.T) {
 	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication callback received.\n", "")
-	saveEndToEndTokens(t)
+	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication successful.\n", "")
 	assertCommandResult(
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "residential"}, cfg, runner),
@@ -254,8 +251,7 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication callback received.\n", "")
-	saveEndToEndTokens(t)
+	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication successful.\n", "")
 
 	server.SetConnectStatus(http.StatusForbidden)
 	assertCommandResult(
@@ -359,22 +355,6 @@ func loadEndToEndSession(t *testing.T) state.Session {
 		t.Fatalf("session Load() error = %v", err)
 	}
 	return session
-}
-
-// saveEndToEndTokens represents completion by the browser callback, which is
-// intentionally outside the scope of the auth-foundation commit.
-func saveEndToEndTokens(t *testing.T) {
-	t.Helper()
-	store, err := auth.NewDefaultFileStore()
-	if err != nil {
-		t.Fatalf("auth.NewDefaultFileStore() error = %v", err)
-	}
-	if err := store.SaveAccessToken("test-auth-token"); err != nil {
-		t.Fatalf("SaveAccessToken() error = %v", err)
-	}
-	if err := store.SaveRefreshToken("test-refresh-token"); err != nil {
-		t.Fatalf("SaveRefreshToken() error = %v", err)
-	}
 }
 
 func testConfigDirectory(t *testing.T) string {

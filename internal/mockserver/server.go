@@ -13,13 +13,15 @@ import (
 )
 
 const (
-	authToken    = "test-auth-token"
-	refreshToken = "test-refresh-token"
+	authToken         = "test-auth-token"
+	refreshToken      = "test-refresh-token"
+	authorizationCode = "test-authorization-code"
 )
 
 // Snapshot contains the non-sensitive requests observed by a Server.
 type Snapshot struct {
 	AuthCalls          int
+	TokenExchangeCalls int
 	TokenRefreshCalls  int
 	CountryQueries     []string
 	ConnectRequests    []proxy.ConnectRequest
@@ -36,6 +38,7 @@ type Server struct {
 	disconnectStatus   int
 	unauthorizedProxy  int
 	authCalls          int
+	tokenExchangeCalls int
 	tokenRefreshCalls  int
 	countryQueries     []string
 	connectRequests    []proxy.ConnectRequest
@@ -99,6 +102,7 @@ func (s *Server) Snapshot() Snapshot {
 	defer s.mu.Unlock()
 	return Snapshot{
 		AuthCalls:          s.authCalls,
+		TokenExchangeCalls: s.tokenExchangeCalls,
 		TokenRefreshCalls:  s.tokenRefreshCalls,
 		CountryQueries:     append([]string(nil), s.countryQueries...),
 		ConnectRequests:    append([]proxy.ConnectRequest(nil), s.connectRequests...),
@@ -110,8 +114,8 @@ func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch request.URL.Path {
 	case "/api/v1/magic-link":
 		s.handleAuth(writer, request)
-	case "/api/v1/token/refresh":
-		s.handleTokenRefresh(writer, request)
+	case "/api/v1/oauth/token":
+		s.handleOAuthToken(writer, request)
 	case "/api/v1/connection/config":
 		s.handleCountries(writer, request)
 	case "/api/v1/connection/connect":
@@ -158,7 +162,7 @@ func sendAuthCallback(continueTo string) {
 		return
 	}
 	query := callbackURL.Query()
-	query.Set("code", "test-authorization-code")
+	query.Set("code", authorizationCode)
 	callbackURL.RawQuery = query.Encode()
 	response, err := http.Get(callbackURL.String())
 	if err == nil {
@@ -166,24 +170,51 @@ func sendAuthCallback(continueTo string) {
 	}
 }
 
-func (s *Server) handleTokenRefresh(writer http.ResponseWriter, request *http.Request) {
+func (s *Server) handleOAuthToken(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	var body struct {
+		GrantType    string `json:"grant_type"`
+		Code         string `json:"code"`
+		ClientID     string `json:"client_id"`
+		CodeVerifier string `json:"code_verifier"`
 		RefreshToken string `json:"refresh_token"`
 	}
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.RefreshToken != refreshToken {
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.ClientID != "dvpn" {
 		writer.WriteHeader(http.StatusUnauthorized)
 		return
 	}
+
 	s.mu.Lock()
-	s.tokenRefreshCalls++
+	switch body.GrantType {
+	case "authorization_code":
+		if body.Code != authorizationCode || body.CodeVerifier == "" || body.RefreshToken != "" {
+			s.mu.Unlock()
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		s.tokenExchangeCalls++
+	case "refresh_token":
+		if body.RefreshToken != refreshToken || body.Code != "" || body.CodeVerifier != "" {
+			s.mu.Unlock()
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		s.tokenRefreshCalls++
+	default:
+		s.mu.Unlock()
+		writer.WriteHeader(http.StatusUnauthorized)
+		return
+	}
 	s.mu.Unlock()
-	writeJSON(writer, http.StatusOK, map[string]string{
+	writeJSON(writer, http.StatusOK, map[string]any{
 		"access_token":  authToken,
 		"refresh_token": refreshToken,
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"user_id":       "test-user",
 	})
 }
 

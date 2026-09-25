@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -152,25 +153,32 @@ func TestCompleteCallbackStoresAuthorizationCode(t *testing.T) {
 
 func TestExchangeUsesPendingPKCEAndStoresTokens(t *testing.T) {
 	pending := testPendingAuth()
+	pending.AuthorizationCode = "authorization-code"
 	store := &memoryCredentialStore{pending: &pending}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v1/auth/token" {
-			t.Errorf("path = %q, want /api/v1/auth/token", request.URL.Path)
+		if request.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", request.Method)
 		}
-		var body tokenExchangeRequest
+		if request.URL.Path != "/api/v1/oauth/token" {
+			t.Errorf("path = %q, want /api/v1/oauth/token", request.URL.Path)
+		}
+		var body tokenRequest
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode token request: %v", err)
 		}
-		if body.AuthorizationCode != "authorization-code" || body.CodeVerifier != pending.CodeVerifier || body.CallbackURL != pending.CallbackURL {
-			t.Errorf("token request = %+v, want code and saved PKCE context", body)
+		if body.GrantType != authorizationGrant || body.Code != pending.AuthorizationCode || body.ClientID != "dvpn" || body.CodeVerifier != pending.CodeVerifier || body.Device != "test-device" {
+			t.Errorf("token request = %+v, want authorization-code grant and saved PKCE context", body)
 		}
-		_, _ = writer.Write([]byte(`{"access_token":"access-value","refresh_token":"refresh-value"}`))
+		if body.RefreshToken != "" {
+			t.Errorf("token request unexpectedly contains refresh token")
+		}
+		_, _ = writer.Write([]byte(`{"access_token":"access-value","refresh_token":"refresh-value","token_type":"Bearer","expires_in":3600,"user_id":"user-123"}`))
 	}))
 	defer server.Close()
 
 	service := newTestService(t, server.URL, store)
 	service.now = func() time.Time { return pending.ExpiresAt.Add(-time.Minute) }
-	if err := service.Exchange(context.Background(), "authorization-code", pending.State); err != nil {
+	if err := service.Exchange(context.Background()); err != nil {
 		t.Fatalf("Exchange() error = %v", err)
 	}
 	if store.accessToken != "access-value" || store.refreshToken != "refresh-value" {
@@ -183,11 +191,12 @@ func TestExchangeUsesPendingPKCEAndStoresTokens(t *testing.T) {
 
 func TestExchangeRejectsExpiredPendingAuth(t *testing.T) {
 	pending := testPendingAuth()
+	pending.AuthorizationCode = "authorization-code"
 	store := &memoryCredentialStore{pending: &pending}
 	service := newTestService(t, "http://127.0.0.1:1", store)
 	service.now = func() time.Time { return pending.ExpiresAt }
 
-	err := service.Exchange(context.Background(), "authorization-code", pending.State)
+	err := service.Exchange(context.Background())
 	if !errors.Is(err, ErrPendingAuthExpired) {
 		t.Fatalf("Exchange() error = %v, want ErrPendingAuthExpired", err)
 	}
@@ -196,21 +205,66 @@ func TestExchangeRejectsExpiredPendingAuth(t *testing.T) {
 	}
 }
 
+func TestExchangeRejectsInvalidTokenResponseWithoutSavingTokens(t *testing.T) {
+	pending := testPendingAuth()
+	pending.AuthorizationCode = "authorization-code"
+	store := &memoryCredentialStore{pending: &pending}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"access_token":"access-value","refresh_token":"refresh-value","token_type":"mac","expires_in":3600}`))
+	}))
+	defer server.Close()
+
+	service := newTestService(t, server.URL, store)
+	service.now = func() time.Time { return pending.ExpiresAt.Add(-time.Minute) }
+	err := service.Exchange(context.Background())
+	if err == nil || err.Error() != "authentication response contained an unsupported token type" {
+		t.Fatalf("Exchange() error = %v, want unsupported token type", err)
+	}
+	if store.accessToken != "" || store.refreshToken != "" {
+		t.Errorf("invalid response saved tokens = %q, %q", store.accessToken, store.refreshToken)
+	}
+}
+
+func TestExchangeReportsHTTPFailureWithoutResponseDetails(t *testing.T) {
+	pending := testPendingAuth()
+	pending.AuthorizationCode = "authorization-code"
+	store := &memoryCredentialStore{pending: &pending}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusUnauthorized)
+		_, _ = writer.Write([]byte(`{"message":"authorization code detail must remain private"}`))
+	}))
+	defer server.Close()
+
+	service := newTestService(t, server.URL, store)
+	service.now = func() time.Time { return pending.ExpiresAt.Add(-time.Minute) }
+	err := service.Exchange(context.Background())
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("Exchange() error = %v, want HTTP status 401", err)
+	}
+	if err.Error() != "HTTP status 401" {
+		t.Errorf("error = %q, want status only", err)
+	}
+}
+
 func TestConfiguredClientRefreshesUsingRefreshTokenContract(t *testing.T) {
 	var refreshCalls atomic.Int32
 	authServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		refreshCalls.Add(1)
-		if request.URL.Path != "/api/v1/token/refresh" {
-			t.Errorf("path = %q, want /api/v1/token/refresh", request.URL.Path)
+		if request.URL.Path != "/api/v1/oauth/token" {
+			t.Errorf("path = %q, want /api/v1/oauth/token", request.URL.Path)
 		}
-		var body refreshRequest
+		var body tokenRequest
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode refresh request: %v", err)
 		}
-		if body.RefreshToken != "old-refresh" {
-			t.Errorf("refresh token = %q, want old-refresh", body.RefreshToken)
+		if body.GrantType != refreshTokenGrant || body.RefreshToken != "old-refresh" || body.ClientID != "dvpn" {
+			t.Errorf("refresh request = %+v, want refresh-token grant", body)
 		}
-		_, _ = writer.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh"}`))
+		if body.Code != "" || body.CodeVerifier != "" || body.Device != "" {
+			t.Errorf("refresh request unexpectedly contains authorization-code fields")
+		}
+		_, _ = writer.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600,"user_id":"user-123"}`))
 	}))
 	defer authServer.Close()
 
@@ -249,6 +303,38 @@ func TestConfiguredClientRefreshesUsingRefreshTokenContract(t *testing.T) {
 	}
 }
 
+func TestConfiguredClientReportsInvalidRefreshWithoutLeakingResponse(t *testing.T) {
+	authServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusUnauthorized)
+		_, _ = writer.Write([]byte(`{"message":"refresh token detail must remain private"}`))
+	}))
+	defer authServer.Close()
+
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer api.Close()
+
+	store := &memoryCredentialStore{accessToken: "expired-access", refreshToken: "invalid-refresh"}
+	service := newTestService(t, authServer.URL, store)
+	apiClient, err := client.New(api.URL, time.Second, false)
+	if err != nil {
+		t.Fatalf("client.New() error = %v", err)
+	}
+	if err := service.ConfigureClient(apiClient); err != nil {
+		t.Fatalf("ConfigureClient() error = %v", err)
+	}
+
+	err = apiClient.Get(context.Background(), "/protected", nil)
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("Get() error = %v, want refresh HTTP status 401", err)
+	}
+	if strings.Contains(err.Error(), "refresh token detail") || strings.Contains(err.Error(), "invalid-refresh") {
+		t.Errorf("Get() error exposed sensitive response data: %q", err)
+	}
+}
+
 func newTestService(t *testing.T, authURL string, store CredentialStore) *Service {
 	t.Helper()
 	authClient, err := client.New(authURL+"/api/v1", time.Second, false)
@@ -257,6 +343,7 @@ func newTestService(t *testing.T, authURL string, store CredentialStore) *Servic
 	}
 	return NewService(authClient, store, Options{
 		ClientID:       "dvpn",
+		Device:         "test-device",
 		PendingAuthTTL: 10 * time.Minute,
 	})
 }

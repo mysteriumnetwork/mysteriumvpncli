@@ -595,8 +595,13 @@ func runAuth(args []string, cfg config.Config, stdout, stderr io.Writer) int {
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
+	if err := service.Exchange(callbackContext); err != nil {
+		_ = service.Cancel()
+		writeAuthenticationError(stderr, err)
+		return 1
+	}
 
-	fmt.Fprintln(stdout, "Authentication callback received.")
+	fmt.Fprintln(stdout, "Authentication successful.")
 	return 0
 }
 
@@ -658,6 +663,7 @@ func newAuthService(cfg config.Config) (*auth.Service, error) {
 	}
 	return auth.NewService(sentinelClient, store, auth.Options{
 		ClientID:       cfg.AuthClientID,
+		Device:         cfg.AuthDevice,
 		PendingAuthTTL: cfg.PendingAuthTTL,
 	}), nil
 }

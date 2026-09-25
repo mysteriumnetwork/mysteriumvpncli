@@ -104,24 +104,35 @@ func TestRunAuth(t *testing.T) {
 	configureTestHome(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v1/magic-link" {
-			t.Errorf("path = %q, want magic-link auth endpoint", request.URL.Path)
+		switch request.URL.Path {
+		case "/api/v1/magic-link":
+			var body map[string]string
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if body["email"] != "alice@example.com" || body["client_id"] != "dvpn" || body["continue_to"] == "" {
+				t.Errorf("request body = %v, want email, client ID, and continue URL", body)
+			}
+			if body["code_challenge"] == "" {
+				t.Error("request body is missing code_challenge")
+			}
+			if body["code_challenge_method"] != "S256" {
+				t.Errorf("code challenge method = %q, want S256", body["code_challenge_method"])
+			}
+			writer.WriteHeader(http.StatusAccepted)
+			go sendTestAuthCallback(body["continue_to"])
+		case "/api/v1/oauth/token":
+			var body map[string]string
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode token request: %v", err)
+			}
+			if body["grant_type"] != "authorization_code" || body["code"] != "test-authorization-code" || body["client_id"] != "dvpn" || body["code_verifier"] == "" {
+				t.Errorf("token request body = %v, want authorization-code exchange", body)
+			}
+			_, _ = writer.Write([]byte(`{"access_token":"test-access-token","refresh_token":"test-refresh-token","token_type":"Bearer","expires_in":3600,"user_id":"user-123"}`))
+		default:
+			http.NotFound(writer, request)
 		}
-		var body map[string]string
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		if body["email"] != "alice@example.com" || body["client_id"] != "dvpn" || body["continue_to"] == "" {
-			t.Errorf("request body = %v, want email, client ID, and continue URL", body)
-		}
-		if body["code_challenge"] == "" {
-			t.Error("request body is missing code_challenge")
-		}
-		if body["code_challenge_method"] != "S256" {
-			t.Errorf("code challenge method = %q, want S256", body["code_challenge_method"])
-		}
-		writer.WriteHeader(http.StatusAccepted)
-		go sendTestAuthCallback(body["continue_to"])
 	}))
 	defer server.Close()
 
@@ -140,22 +151,23 @@ func TestRunAuth(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	if stdout.String() != "Authentication link sent. Check your email.\nAuthentication callback received.\n" {
+	if stdout.String() != "Authentication link sent. Check your email.\nAuthentication successful.\n" {
 		t.Errorf("stdout = %q, want success message", stdout.String())
 	}
 	store, err := auth.NewDefaultFileStore()
 	if err != nil {
 		t.Fatalf("NewDefaultFileStore() error = %v", err)
 	}
-	pending, err := store.LoadPendingAuth()
-	if err != nil {
-		t.Fatalf("LoadPendingAuth() error = %v", err)
+	if _, err := store.LoadPendingAuth(); !errors.Is(err, auth.ErrPendingAuthNotFound) {
+		t.Errorf("LoadPendingAuth() error = %v, want cleared pending state", err)
 	}
-	if pending.Email != "alice@example.com" || pending.CodeVerifier == "" || pending.AuthorizationCode != "test-authorization-code" || pending.ExpiresAt.IsZero() {
-		t.Errorf("pending auth = %+v, want email, verifier, authorization code, and expiry", pending)
+	accessToken, err := store.LoadAccessToken()
+	if err != nil || accessToken != "test-access-token" {
+		t.Errorf("LoadAccessToken() = %q, %v; want test-access-token", accessToken, err)
 	}
-	if _, err := store.LoadAccessToken(); !errors.Is(err, auth.ErrTokenNotFound) {
-		t.Errorf("LoadAccessToken() error = %v, want no token before callback completion", err)
+	refreshToken, err := store.LoadRefreshToken()
+	if err != nil || refreshToken != "test-refresh-token" {
+		t.Errorf("LoadRefreshToken() = %q, %v; want test-refresh-token", refreshToken, err)
 	}
 }
 
@@ -197,6 +209,57 @@ func TestRunAuthReportsOnlyHTTPStatus(t *testing.T) {
 	}
 	if got, want := stderr.String(), "mystvpn auth: HTTP status 401\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
+	}
+}
+
+func TestRunAuthReportsTokenExchangeFailure(t *testing.T) {
+	configureTestHome(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/magic-link":
+			var body map[string]string
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode magic-link request: %v", err)
+			}
+			writer.WriteHeader(http.StatusAccepted)
+			go sendTestAuthCallback(body["continue_to"])
+		case "/api/v1/oauth/token":
+			writer.WriteHeader(http.StatusUnauthorized)
+			_, _ = writer.Write([]byte(`{"message":"do not print this detail"}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	cfg := config.Load()
+	cfg.SentinelURL = server.URL + "/api/v1"
+	cfg.AuthCallbackTimeout = 2 * time.Second
+	exitCode := runWithConfig(
+		[]string{"auth", "--email", "alice@example.com"},
+		nil,
+		&stdout,
+		&stderr,
+		cfg,
+	)
+
+	if exitCode != 1 {
+		t.Fatalf("run() exit code = %d, want 1", exitCode)
+	}
+	if got, want := stdout.String(), "Authentication link sent. Check your email.\n"; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+	if got, want := stderr.String(), "mystvpn auth: HTTP status 401\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	store := defaultTestStore(t)
+	if _, err := store.LoadAccessToken(); !errors.Is(err, auth.ErrTokenNotFound) {
+		t.Errorf("LoadAccessToken() error = %v, want no saved token", err)
+	}
+	if _, err := store.LoadPendingAuth(); !errors.Is(err, auth.ErrPendingAuthNotFound) {
+		t.Errorf("LoadPendingAuth() error = %v, want cleared pending state", err)
 	}
 }
 
@@ -382,17 +445,17 @@ func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 	var refreshCalls atomic.Int32
 	authServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		refreshCalls.Add(1)
-		if request.URL.Path != "/api/v1/token/refresh" {
+		if request.URL.Path != "/api/v1/oauth/token" {
 			t.Errorf("refresh path = %q", request.URL.Path)
 		}
 		var body map[string]string
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode refresh request: %v", err)
 		}
-		if body["refresh_token"] != "old-refresh" {
-			t.Errorf("refresh token = %q, want old-refresh", body["refresh_token"])
+		if body["grant_type"] != "refresh_token" || body["refresh_token"] != "old-refresh" || body["client_id"] != "dvpn" {
+			t.Errorf("refresh request = %v, want refresh-token grant", body)
 		}
-		_, _ = writer.Write([]byte(`{"access_token":"new-auth","refresh_token":"new-refresh"}`))
+		_, _ = writer.Write([]byte(`{"access_token":"new-auth","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`))
 	}))
 	defer authServer.Close()
 

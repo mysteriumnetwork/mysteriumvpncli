@@ -50,9 +50,11 @@ Running `mystvpn` without a command also prints the command overview.
 
 The command requests a magic link, starts a temporary listener on a random
 IPv4 loopback port, and waits briefly for the browser redirect. It validates
-the callback state and nonce, then securely stores the authorization code and
-PKCE verifier for token exchange. Paste-code fallback and token exchange are
-not part of this commit.
+the callback state and nonce, exchanges the authorization code using the PKCE
+verifier, and securely stores the resulting access and refresh tokens. The
+access token is attached automatically to later API calls; an unauthorized
+response triggers one refresh-token exchange and retries the request once.
+Paste-code fallback is not supported.
 
 ### Countries
 
