@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -25,7 +26,10 @@ import (
 
 var version = "dev"
 
-const countriesPerRow = 10
+const (
+	countriesPerRow = 10
+	maxAuthCodeSize = 8 << 10
+)
 
 var commands = []string{
 	"auth",
@@ -63,7 +67,7 @@ func runWithDependencies(args []string, stdin *os.File, stdout, stderr io.Writer
 
 	switch args[0] {
 	case "auth":
-		return runAuth(args[1:], cfg, stdout, stderr)
+		return runAuth(args[1:], cfg, stdin, stdout, stderr)
 	case "countries":
 		return runCountries(args[1:], cfg, stdout, stderr)
 	case "connect":
@@ -522,7 +526,7 @@ func writeCountriesError(output io.Writer, err error) {
 	fmt.Fprintln(output, "mystvpn countries: request failed")
 }
 
-func runAuth(args []string, cfg config.Config, stdout, stderr io.Writer) int {
+func runAuth(args []string, cfg config.Config, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("auth", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	email := flags.String("email", "", "account email")
@@ -546,28 +550,34 @@ func runAuth(args []string, cfg config.Config, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "mystvpn auth: invalid callback timeout")
 		return 1
 	}
-
-	callback, err := auth.NewLoopbackCallback()
-	if err != nil {
-		fmt.Fprintln(stderr, "mystvpn auth: could not start local callback listener")
+	if cfg.AuthCodeInputTimeout <= 0 {
+		fmt.Fprintln(stderr, "mystvpn auth: invalid authorization code timeout")
 		return 1
 	}
-	defer callback.Close()
+
+	callback, callbackErr := auth.NewLoopbackCallback()
+	callbackURL := ""
+	if callbackErr == nil {
+		callbackURL = callback.URL()
+		defer callback.Close()
+	}
 
 	service, err := newAuthService(cfg)
 	if err != nil {
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
-	result, err := service.Start(context.Background(), *email, callback.URL())
+	result, err := service.Start(context.Background(), *email, callbackURL)
 	if err != nil {
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
 
 	fmt.Fprintln(stdout, "Authentication link sent. Check your email.")
+	authURL := ""
+	authURLShown := false
 	if result.AuthURL != "" {
-		authURL, err := validateAuthenticationURL(result.AuthURL)
+		authURL, err = validateAuthenticationURL(result.AuthURL)
 		if err != nil {
 			_ = service.Cancel()
 			fmt.Fprintln(stderr, "mystvpn auth: invalid authentication URL")
@@ -575,27 +585,56 @@ func runAuth(args []string, cfg config.Config, stdout, stderr io.Writer) int {
 		}
 		if err := openBrowser(authURL); err != nil {
 			fmt.Fprintf(stdout, "Open this URL to continue: %s\n", authURL)
+			authURLShown = true
 		}
 	}
 
-	callbackContext, cancel := context.WithTimeout(context.Background(), cfg.AuthCallbackTimeout)
-	defer cancel()
-	callbackResult, err := callback.Wait(callbackContext, result.Pending.State, result.Pending.Nonce)
-	if err != nil {
-		_ = service.Cancel()
-		if errors.Is(err, context.DeadlineExceeded) {
-			fmt.Fprintln(stderr, "mystvpn auth: authentication timed out")
-		} else {
-			fmt.Fprintln(stderr, "mystvpn auth: browser callback failed")
+	completed := false
+	if callback != nil {
+		callbackContext, cancel := context.WithTimeout(context.Background(), cfg.AuthCallbackTimeout)
+		callbackResult, callbackWaitErr := callback.Wait(callbackContext, result.Pending.State, result.Pending.Nonce)
+		cancel()
+		if callbackWaitErr == nil {
+			if err := service.CompleteCallback(callbackResult); err != nil {
+				_ = service.Cancel()
+				writeAuthenticationError(stderr, err)
+				return 1
+			}
+			completed = true
 		}
-		return 1
 	}
-	if err := service.CompleteCallback(callbackResult); err != nil {
-		_ = service.Cancel()
-		writeAuthenticationError(stderr, err)
-		return 1
+
+	if !completed {
+		fmt.Fprintln(stdout, "Browser callback not received. Paste the authorization code to continue.")
+		if authURL != "" && !authURLShown {
+			fmt.Fprintf(stdout, "Open this URL to continue: %s\n", authURL)
+		} else if authURL == "" {
+			fmt.Fprintln(stdout, "Open the authentication link from your email in a browser.")
+		}
+		fmt.Fprintln(stdout, "Authorization code:")
+
+		codeContext, cancel := context.WithTimeout(context.Background(), cfg.AuthCodeInputTimeout)
+		authorizationCode, codeErr := readAuthorizationCode(codeContext, stdin)
+		cancel()
+		if codeErr != nil {
+			_ = service.Cancel()
+			if errors.Is(codeErr, context.DeadlineExceeded) {
+				fmt.Fprintln(stderr, "mystvpn auth: authorization code input timed out")
+			} else {
+				fmt.Fprintln(stderr, "mystvpn auth: authorization code was not provided")
+			}
+			return 1
+		}
+		if err := service.CompleteCode(authorizationCode); err != nil {
+			_ = service.Cancel()
+			writeAuthenticationError(stderr, err)
+			return 1
+		}
 	}
-	if err := service.Exchange(callbackContext); err != nil {
+
+	exchangeContext, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+	if err := service.Exchange(exchangeContext); err != nil {
 		_ = service.Cancel()
 		writeAuthenticationError(stderr, err)
 		return 1
@@ -603,6 +642,43 @@ func runAuth(args []string, cfg config.Config, stdout, stderr io.Writer) int {
 
 	fmt.Fprintln(stdout, "Authentication successful.")
 	return 0
+}
+
+func readAuthorizationCode(ctx context.Context, input io.Reader) (string, error) {
+	if input == nil {
+		return "", errors.New("authorization code input is unavailable")
+	}
+
+	type readResult struct {
+		code string
+		err  error
+	}
+	result := make(chan readResult, 1)
+	go func() {
+		scanner := bufio.NewScanner(input)
+		scanner.Buffer(make([]byte, 1024), maxAuthCodeSize)
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				result <- readResult{err: err}
+				return
+			}
+			result <- readResult{err: errors.New("authorization code was not provided")}
+			return
+		}
+		code := strings.TrimSpace(scanner.Text())
+		if code == "" {
+			result <- readResult{err: errors.New("authorization code was not provided")}
+			return
+		}
+		result <- readResult{code: code}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case value := <-result:
+		return value.code, value.err
+	}
 }
 
 func writeAuthenticationError(output io.Writer, err error) {

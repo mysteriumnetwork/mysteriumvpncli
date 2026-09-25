@@ -128,6 +128,30 @@ func TestStartFailureClearsPendingAuthAndReportsStatusOnly(t *testing.T) {
 	}
 }
 
+func TestStartWithoutCallbackOmitsContinueTo(t *testing.T) {
+	var requestBody startAuthRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		writer.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	store := &memoryCredentialStore{}
+	service := newTestService(t, server.URL, store)
+	result, err := service.Start(context.Background(), "alice@example.com", "")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if requestBody.ContinueTo != "" || result.Pending.CallbackURL != "" {
+		t.Errorf("callback URL = %q, continue_to = %q; want both omitted", result.Pending.CallbackURL, requestBody.ContinueTo)
+	}
+	if result.Pending.CodeVerifier == "" || result.Pending.State == "" || result.Pending.Nonce == "" {
+		t.Errorf("pending fallback authentication is incomplete: %+v", result.Pending)
+	}
+}
+
 func TestCompleteCallbackStoresAuthorizationCode(t *testing.T) {
 	pending := testPendingAuth()
 	store := &memoryCredentialStore{pending: &pending}
@@ -148,6 +172,24 @@ func TestCompleteCallbackStoresAuthorizationCode(t *testing.T) {
 	}
 	if stored.AuthorizationCode != "authorization-code" {
 		t.Errorf("authorization code = %q, want saved code", stored.AuthorizationCode)
+	}
+}
+
+func TestCompleteCodeStoresTrimmedAuthorizationCode(t *testing.T) {
+	pending := testPendingAuth()
+	store := &memoryCredentialStore{pending: &pending}
+	service := newTestService(t, "http://127.0.0.1:1", store)
+	service.now = func() time.Time { return pending.ExpiresAt.Add(-time.Minute) }
+
+	if err := service.CompleteCode("  pasted-authorization-code  "); err != nil {
+		t.Fatalf("CompleteCode() error = %v", err)
+	}
+	stored, err := store.LoadPendingAuth()
+	if err != nil {
+		t.Fatalf("LoadPendingAuth() error = %v", err)
+	}
+	if stored.AuthorizationCode != "pasted-authorization-code" {
+		t.Errorf("authorization code = %q, want trimmed pasted code", stored.AuthorizationCode)
 	}
 }
 

@@ -229,7 +229,6 @@ func validatePendingAuth(pending PendingAuth) error {
 		strings.TrimSpace(pending.Nonce) == "" ||
 		strings.TrimSpace(pending.CodeVerifier) == "" ||
 		strings.TrimSpace(pending.CodeChallenge) == "" ||
-		strings.TrimSpace(pending.CallbackURL) == "" ||
 		pending.ExpiresAt.IsZero() {
 		return errors.New("pending authentication is incomplete")
 	}

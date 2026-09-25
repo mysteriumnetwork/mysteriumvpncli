@@ -6,35 +6,38 @@ import (
 )
 
 const (
-	DefaultAPIURL              = "https://api.mysteriumvpn.com/api/v1"
-	DefaultSentinelURL         = "https://sentinel.mysterium.network/api/v1"
-	DefaultAuthClientID        = "dvpn"
-	DefaultTimeout             = 30 * time.Second
-	DefaultAuthCallbackTimeout = 2 * time.Minute
-	DefaultPendingAuthTTL      = 10 * time.Minute
+	DefaultAPIURL               = "https://api.mysteriumvpn.com/api/v1"
+	DefaultSentinelURL          = "https://sentinel.mysterium.network/api/v1"
+	DefaultAuthClientID         = "dvpn"
+	DefaultTimeout              = 30 * time.Second
+	DefaultAuthCallbackTimeout  = 2 * time.Minute
+	DefaultAuthCodeInputTimeout = 5 * time.Minute
+	DefaultPendingAuthTTL       = 10 * time.Minute
 )
 
 // Config contains settings shared by CLI commands.
 type Config struct {
-	APIURL              string
-	SentinelURL         string
-	AuthClientID        string
-	AuthDevice          string
-	AuthCallbackTimeout time.Duration
-	PendingAuthTTL      time.Duration
-	Debug               bool
-	Timeout             time.Duration
+	APIURL               string
+	SentinelURL          string
+	AuthClientID         string
+	AuthDevice           string
+	AuthCallbackTimeout  time.Duration
+	AuthCodeInputTimeout time.Duration
+	PendingAuthTTL       time.Duration
+	Debug                bool
+	Timeout              time.Duration
 }
 
 // Load returns the application's built-in configuration.
 func Load() Config {
 	return Config{
-		APIURL:              DefaultAPIURL,
-		SentinelURL:         DefaultSentinelURL,
-		AuthClientID:        DefaultAuthClientID,
-		AuthDevice:          "",
-		AuthCallbackTimeout: DefaultAuthCallbackTimeout,
-		PendingAuthTTL:      DefaultPendingAuthTTL,
-		Timeout:             DefaultTimeout,
+		APIURL:               DefaultAPIURL,
+		SentinelURL:          DefaultSentinelURL,
+		AuthClientID:         DefaultAuthClientID,
+		AuthDevice:           "",
+		AuthCallbackTimeout:  DefaultAuthCallbackTimeout,
+		AuthCodeInputTimeout: DefaultAuthCodeInputTimeout,
+		PendingAuthTTL:       DefaultPendingAuthTTL,
+		Timeout:              DefaultTimeout,
 	}
 }

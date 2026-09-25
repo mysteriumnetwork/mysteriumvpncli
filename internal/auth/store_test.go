@@ -99,6 +99,31 @@ func TestFileStorePendingAuthLifecycle(t *testing.T) {
 	}
 }
 
+func TestFileStoreAllowsPendingPasteCodeFlowWithoutCallback(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "credentials")
+	store := NewFileStore(directory)
+	pending := PendingAuth{
+		Email:         "alice@example.com",
+		State:         "state-value",
+		Nonce:         "nonce-value",
+		CodeVerifier:  "verifier-value",
+		CodeChallenge: "challenge-value",
+		ExpiresAt:     time.Date(2026, time.September, 25, 10, 10, 0, 0, time.UTC),
+	}
+
+	if err := store.SavePendingAuth(pending); err != nil {
+		t.Fatalf("SavePendingAuth() error = %v", err)
+	}
+	loaded, err := store.LoadPendingAuth()
+	if err != nil {
+		t.Fatalf("LoadPendingAuth() error = %v", err)
+	}
+	if loaded != pending {
+		t.Errorf("loaded pending auth = %+v, want %+v", loaded, pending)
+	}
+	assertPermissions(t, filepath.Join(directory, pendingAuthFile), 0o600)
+}
+
 func assertPermissions(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 

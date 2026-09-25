@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -171,6 +173,113 @@ func TestRunAuth(t *testing.T) {
 	}
 }
 
+func TestRunAuthFallsBackToPastedCode(t *testing.T) {
+	configureTestHome(t)
+	var codeVerifier string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/magic-link":
+			writer.WriteHeader(http.StatusAccepted)
+		case "/api/v1/oauth/token":
+			var body map[string]string
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode token request: %v", err)
+			}
+			codeVerifier = body["code_verifier"]
+			if body["grant_type"] != "authorization_code" || body["code"] != "pasted-authorization-code" || codeVerifier == "" {
+				t.Errorf("token request body = %v, want pasted code and saved PKCE verifier", body)
+			}
+			_, _ = writer.Write([]byte(`{"access_token":"fallback-access-token","refresh_token":"fallback-refresh-token","token_type":"Bearer","expires_in":3600}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	stdin := authCodeInput(t, "pasted-authorization-code")
+	var stdout, stderr bytes.Buffer
+	cfg := config.Load()
+	cfg.SentinelURL = server.URL + "/api/v1"
+	cfg.AuthCallbackTimeout = 20 * time.Millisecond
+	cfg.AuthCodeInputTimeout = time.Second
+	exitCode := runWithConfig(
+		[]string{"auth", "--email", "alice@example.com"},
+		stdin,
+		&stdout,
+		&stderr,
+		cfg,
+	)
+
+	if exitCode != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
+	}
+	wantOutput := "Authentication link sent. Check your email.\n" +
+		"Browser callback not received. Paste the authorization code to continue.\n" +
+		"Open the authentication link from your email in a browser.\n" +
+		"Authorization code:\n" +
+		"Authentication successful.\n"
+	if stdout.String() != wantOutput {
+		t.Errorf("stdout = %q, want %q", stdout.String(), wantOutput)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+	combinedOutput := stdout.String() + stderr.String()
+	for _, secret := range []string{"pasted-authorization-code", "fallback-access-token", "fallback-refresh-token", codeVerifier} {
+		if secret != "" && strings.Contains(combinedOutput, secret) {
+			t.Errorf("CLI output exposed secret %q", secret)
+		}
+	}
+
+	credentialsDirectory := filepath.Join(testConfigDirectory(t), "mystvpn", "credentials")
+	assertFileMode(t, credentialsDirectory, 0o700)
+	assertFileMode(t, filepath.Join(credentialsDirectory, "access_token"), 0o600)
+	assertFileMode(t, filepath.Join(credentialsDirectory, "refresh_token"), 0o600)
+}
+
+func TestRunAuthClearsPendingStateWhenCodeInputTimesOut(t *testing.T) {
+	configureTestHome(t)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/magic-link" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	stdin, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer stdin.Close()
+	defer writer.Close()
+
+	var stdout, stderr bytes.Buffer
+	cfg := config.Load()
+	cfg.SentinelURL = server.URL + "/api/v1"
+	cfg.AuthCallbackTimeout = 10 * time.Millisecond
+	cfg.AuthCodeInputTimeout = 20 * time.Millisecond
+	exitCode := runWithConfig(
+		[]string{"auth", "--email", "alice@example.com"},
+		stdin,
+		&stdout,
+		&stderr,
+		cfg,
+	)
+
+	if exitCode != 1 {
+		t.Fatalf("run() exit code = %d, want 1", exitCode)
+	}
+	if got, want := stderr.String(), "mystvpn auth: authorization code input timed out\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	store := defaultTestStore(t)
+	if _, err := store.LoadPendingAuth(); !errors.Is(err, auth.ErrPendingAuthNotFound) {
+		t.Errorf("LoadPendingAuth() error = %v, want cleared pending state", err)
+	}
+}
+
 func TestRunAuthRequiresEmail(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
@@ -291,6 +400,25 @@ func TestRunAuthRejectsHelpFlags(t *testing.T) {
 			}
 		})
 	}
+}
+
+func authCodeInput(t *testing.T, code string) *os.File {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	if _, err := writer.WriteString(code + "\n"); err != nil {
+		reader.Close()
+		writer.Close()
+		t.Fatalf("write authorization code input: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		reader.Close()
+		t.Fatalf("close authorization code input: %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	return reader
 }
 
 func TestRunCountries(t *testing.T) {

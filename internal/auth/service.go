@@ -98,9 +98,12 @@ func (s *Service) Start(ctx context.Context, email, callbackURL string) (StartRe
 	if err != nil {
 		return StartResult{}, fmt.Errorf("generate authentication nonce: %w", err)
 	}
-	continueTo, err := callbackURLWithSecurityValues(callbackURL, state, nonce)
-	if err != nil {
-		return StartResult{}, err
+	continueTo := ""
+	if strings.TrimSpace(callbackURL) != "" {
+		continueTo, err = callbackURLWithSecurityValues(callbackURL, state, nonce)
+		if err != nil {
+			return StartResult{}, err
+		}
 	}
 
 	pending := PendingAuth{
@@ -150,7 +153,28 @@ func (s *Service) CompleteCallback(callback CallbackResult) error {
 	if strings.TrimSpace(callback.AuthorizationCode) == "" {
 		return errors.New("authentication callback did not contain an authorization code")
 	}
-	pending.AuthorizationCode = callback.AuthorizationCode
+	return s.saveAuthorizationCode(pending, callback.AuthorizationCode)
+}
+
+// CompleteCode stores an authorization code entered by the user for the same
+// pending PKCE exchange used by the loopback callback flow.
+func (s *Service) CompleteCode(authorizationCode string) error {
+	pending, err := s.store.LoadPendingAuth()
+	if err != nil {
+		return fmt.Errorf("load pending authentication: %w", err)
+	}
+	if !s.now().Before(pending.ExpiresAt) {
+		_ = s.store.ClearPendingAuth()
+		return ErrPendingAuthExpired
+	}
+	if strings.TrimSpace(authorizationCode) == "" {
+		return errors.New("authorization code must not be empty")
+	}
+	return s.saveAuthorizationCode(pending, authorizationCode)
+}
+
+func (s *Service) saveAuthorizationCode(pending PendingAuth, authorizationCode string) error {
+	pending.AuthorizationCode = strings.TrimSpace(authorizationCode)
 	if err := s.store.SavePendingAuth(pending); err != nil {
 		return fmt.Errorf("save completed authentication: %w", err)
 	}

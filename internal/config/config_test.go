@@ -20,6 +20,9 @@ func TestLoadDefaults(t *testing.T) {
 	if DefaultAuthCallbackTimeout != 2*time.Minute {
 		t.Errorf("DefaultAuthCallbackTimeout = %v", DefaultAuthCallbackTimeout)
 	}
+	if DefaultAuthCodeInputTimeout != 5*time.Minute {
+		t.Errorf("DefaultAuthCodeInputTimeout = %v", DefaultAuthCodeInputTimeout)
+	}
 	if DefaultPendingAuthTTL != 10*time.Minute {
 		t.Errorf("DefaultPendingAuthTTL = %v", DefaultPendingAuthTTL)
 	}
@@ -37,6 +40,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.AuthCallbackTimeout != DefaultAuthCallbackTimeout {
 		t.Errorf("AuthCallbackTimeout = %v, want %v", cfg.AuthCallbackTimeout, DefaultAuthCallbackTimeout)
+	}
+	if cfg.AuthCodeInputTimeout != DefaultAuthCodeInputTimeout {
+		t.Errorf("AuthCodeInputTimeout = %v, want %v", cfg.AuthCodeInputTimeout, DefaultAuthCodeInputTimeout)
 	}
 	if cfg.PendingAuthTTL != DefaultPendingAuthTTL {
 		t.Errorf("PendingAuthTTL = %v, want %v", cfg.PendingAuthTTL, DefaultPendingAuthTTL)

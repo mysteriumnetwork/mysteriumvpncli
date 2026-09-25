@@ -44,6 +44,9 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	assertFileMode(t, filepath.Join(credentialsDirectory, "access_token"), 0o600)
 	assertFileMode(t, filepath.Join(credentialsDirectory, "refresh_token"), 0o600)
 	assertFileMode(t, credentialsDirectory, 0o700)
+	if _, err := os.Stat(filepath.Join(credentialsDirectory, "pending_auth.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("pending auth Stat() error = %v, want removed after successful exchange", err)
+	}
 
 	server.RejectNextProxyRequest()
 	assertCommandResult(t, execute("countries", "--ip-type", "residential"), 0, "Available countries (3):\n\nCA  DE  SE\n", "")
@@ -97,6 +100,7 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	if _, err := tokenStore.LoadRefreshToken(); !errors.Is(err, auth.ErrTokenNotFound) {
 		t.Errorf("LoadRefreshToken() error = %v, want ErrTokenNotFound", err)
 	}
+	assertFileMode(t, credentialsDirectory, 0o700)
 
 	snapshot := server.Snapshot()
 	if snapshot.AuthCalls != 1 || snapshot.TokenExchangeCalls != 1 || snapshot.TokenRefreshCalls != 1 || len(snapshot.CountryQueries) != 1 {
