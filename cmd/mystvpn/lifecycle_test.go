@@ -251,8 +251,8 @@ func saveTestAuthToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth.NewDefaultFileStore() error = %v", err)
 	}
-	if err := store.SaveAuthToken("auth-value"); err != nil {
-		t.Fatalf("SaveAuthToken() error = %v", err)
+	if err := store.SaveAccessToken("auth-value"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
 	}
 }
 

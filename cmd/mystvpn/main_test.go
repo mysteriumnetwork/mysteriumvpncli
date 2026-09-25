@@ -53,7 +53,7 @@ func TestRunHelpListsCommands(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0", exitCode)
 	}
-	for _, expected := range []string{"help", "version", "auth --username <name>", "countries --ip-type <residential|hosting>", "disconnect"} {
+	for _, expected := range []string{"help", "version", "auth --email <address>", "countries --ip-type <residential|hosting>", "disconnect"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("help output does not contain %q: %q", expected, stdout.String())
 		}
@@ -102,17 +102,25 @@ func TestRunAuth(t *testing.T) {
 	configureTestHome(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v1/auth/password" {
-			t.Errorf("path = %q, want password auth endpoint", request.URL.Path)
+		if request.URL.Path != "/api/v1/auth/magic-link" {
+			t.Errorf("path = %q, want magic-link auth endpoint", request.URL.Path)
 		}
 		var body map[string]string
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body["username"] != "alice" || body["password"] != "secret" || body["pool"] != "dvpn" {
-			t.Errorf("request body = %v, want credentials and dvpn pool", body)
+		if body["email"] != "alice@example.com" || body["pool"] != "dvpn" || body["callback_url"] != config.DefaultAuthCallbackURL {
+			t.Errorf("request body = %v, want email, callback URL, and dvpn pool", body)
 		}
-		_, _ = writer.Write([]byte(`{"auth_token":"auth-value","refresh_token":"refresh-value"}`))
+		for _, field := range []string{"state", "nonce", "code_challenge"} {
+			if body[field] == "" {
+				t.Errorf("request body is missing %s", field)
+			}
+		}
+		if body["code_challenge_method"] != "S256" {
+			t.Errorf("code challenge method = %q, want S256", body["code_challenge_method"])
+		}
+		writer.WriteHeader(http.StatusAccepted)
 	}))
 	defer server.Close()
 
@@ -120,7 +128,7 @@ func TestRunAuth(t *testing.T) {
 	cfg := config.Load()
 	cfg.SentinelURL = server.URL + "/api/v1"
 	exitCode := runWithConfig(
-		[]string{"auth", "--username", "alice", "--password", "secret"},
+		[]string{"auth", "--email", "alice@example.com"},
 		nil,
 		&stdout,
 		&stderr,
@@ -130,33 +138,35 @@ func TestRunAuth(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	if stdout.String() != "Authentication successful.\n" {
+	if stdout.String() != "Authentication link sent. Check your email.\n" {
 		t.Errorf("stdout = %q, want success message", stdout.String())
 	}
 	store, err := auth.NewDefaultFileStore()
 	if err != nil {
 		t.Fatalf("NewDefaultFileStore() error = %v", err)
 	}
-	authToken, err := store.LoadAuthToken()
-	if err != nil || authToken != "auth-value" {
-		t.Errorf("stored auth token = %q, error = %v", authToken, err)
+	pending, err := store.LoadPendingAuth()
+	if err != nil {
+		t.Fatalf("LoadPendingAuth() error = %v", err)
 	}
-	refreshToken, err := store.LoadRefreshToken()
-	if err != nil || refreshToken != "refresh-value" {
-		t.Errorf("stored refresh token = %q, error = %v", refreshToken, err)
+	if pending.Email != "alice@example.com" || pending.CodeVerifier == "" || pending.ExpiresAt.IsZero() {
+		t.Errorf("pending auth = %+v, want email, verifier, and expiry", pending)
+	}
+	if _, err := store.LoadAccessToken(); !errors.Is(err, auth.ErrTokenNotFound) {
+		t.Errorf("LoadAccessToken() error = %v, want no token before callback completion", err)
 	}
 }
 
-func TestRunAuthRequiresPasswordForNonInteractiveInput(t *testing.T) {
+func TestRunAuthRequiresEmail(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	exitCode := run([]string{"auth", "--username", "alice"}, nil, &stdout, &stderr)
+	exitCode := run([]string{"auth"}, nil, &stdout, &stderr)
 
 	if exitCode != 2 {
 		t.Fatalf("run() exit code = %d, want 2", exitCode)
 	}
-	if !strings.Contains(stderr.String(), "provide --password when standard input is not interactive") {
-		t.Errorf("stderr = %q, want non-interactive password error", stderr.String())
+	if !strings.Contains(stderr.String(), "--email is required") {
+		t.Errorf("stderr = %q, want required-email error", stderr.String())
 	}
 }
 
@@ -173,7 +183,7 @@ func TestRunAuthReportsOnlyHTTPStatus(t *testing.T) {
 	cfg := config.Load()
 	cfg.SentinelURL = server.URL + "/api/v1"
 	exitCode := runWithConfig(
-		[]string{"auth", "--username", "alice", "--password", "wrong"},
+		[]string{"auth", "--email", "alice@example.com"},
 		nil,
 		&stdout,
 		&stderr,
@@ -191,7 +201,7 @@ func TestRunAuthReportsOnlyHTTPStatus(t *testing.T) {
 func TestRunAuthRejectsNonAuthFlags(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	exitCode := run([]string{"auth", "--username", "alice", "--pool", "other"}, nil, &stdout, &stderr)
+	exitCode := run([]string{"auth", "--email", "alice@example.com", "--pool", "other"}, nil, &stdout, &stderr)
 
 	if exitCode != 2 {
 		t.Fatalf("run() exit code = %d, want 2", exitCode)
@@ -223,8 +233,8 @@ func TestRunCountries(t *testing.T) {
 		t.Run(ipType, func(t *testing.T) {
 			configureTestHome(t)
 			store := defaultTestStore(t)
-			if err := store.SaveAuthToken("auth-value"); err != nil {
-				t.Fatalf("SaveAuthToken() error = %v", err)
+			if err := store.SaveAccessToken("auth-value"); err != nil {
+				t.Fatalf("SaveAccessToken() error = %v", err)
 			}
 
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -307,8 +317,8 @@ func TestRunCountriesRequiresAuthentication(t *testing.T) {
 func TestRunCountriesReportsHTTPStatus(t *testing.T) {
 	configureTestHome(t)
 	store := defaultTestStore(t)
-	if err := store.SaveAuthToken("auth-value"); err != nil {
-		t.Fatalf("SaveAuthToken() error = %v", err)
+	if err := store.SaveAccessToken("auth-value"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -360,8 +370,8 @@ func TestWriteCountriesErrorReportsCommonHTTPStatuses(t *testing.T) {
 func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 	configureTestHome(t)
 	store := defaultTestStore(t)
-	if err := store.SaveAuthToken("old-auth"); err != nil {
-		t.Fatalf("SaveAuthToken() error = %v", err)
+	if err := store.SaveAccessToken("old-auth"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
 	}
 	if err := store.SaveRefreshToken("old-refresh"); err != nil {
 		t.Fatalf("SaveRefreshToken() error = %v", err)
@@ -377,10 +387,10 @@ func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode refresh request: %v", err)
 		}
-		if body["token"] != "old-refresh" {
-			t.Errorf("refresh token = %q, want old-refresh", body["token"])
+		if body["refresh_token"] != "old-refresh" {
+			t.Errorf("refresh token = %q, want old-refresh", body["refresh_token"])
 		}
-		_, _ = writer.Write([]byte(`{"auth_token":"new-auth","refresh_token":"new-refresh"}`))
+		_, _ = writer.Write([]byte(`{"access_token":"new-auth","refresh_token":"new-refresh"}`))
 	}))
 	defer authServer.Close()
 
@@ -416,7 +426,7 @@ func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 	if apiCalls.Load() != 2 || refreshCalls.Load() != 1 {
 		t.Errorf("api calls = %d, refresh calls = %d; want 2 and 1", apiCalls.Load(), refreshCalls.Load())
 	}
-	authToken, err := store.LoadAuthToken()
+	authToken, err := store.LoadAccessToken()
 	if err != nil || authToken != "new-auth" {
 		t.Errorf("stored auth token = %q, error = %v", authToken, err)
 	}
@@ -461,8 +471,8 @@ func TestRunLogoutClearsTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDefaultFileStore() error = %v", err)
 	}
-	if err := store.SaveAuthToken("auth-value"); err != nil {
-		t.Fatalf("SaveAuthToken() error = %v", err)
+	if err := store.SaveAccessToken("auth-value"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
 	}
 	if err := store.SaveRefreshToken("refresh-value"); err != nil {
 		t.Fatalf("SaveRefreshToken() error = %v", err)
@@ -477,8 +487,8 @@ func TestRunLogoutClearsTokens(t *testing.T) {
 	if stdout.String() != "Logout successful.\n" {
 		t.Errorf("stdout = %q, want logout success message", stdout.String())
 	}
-	if _, err := store.LoadAuthToken(); !errors.Is(err, auth.ErrTokenNotFound) {
-		t.Errorf("LoadAuthToken() error = %v, want ErrTokenNotFound", err)
+	if _, err := store.LoadAccessToken(); !errors.Is(err, auth.ErrTokenNotFound) {
+		t.Errorf("LoadAccessToken() error = %v, want ErrTokenNotFound", err)
 	}
 	if _, err := store.LoadRefreshToken(); !errors.Is(err, auth.ErrTokenNotFound) {
 		t.Errorf("LoadRefreshToken() error = %v, want ErrTokenNotFound", err)

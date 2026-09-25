@@ -18,7 +18,6 @@ import (
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/proxy"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/state"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/wireguard"
-	"golang.org/x/term"
 )
 
 var version = "dev"
@@ -61,7 +60,7 @@ func runWithDependencies(args []string, stdin *os.File, stdout, stderr io.Writer
 
 	switch args[0] {
 	case "auth":
-		return runAuth(args[1:], cfg, stdin, stdout, stderr)
+		return runAuth(args[1:], cfg, stdout, stderr)
 	case "countries":
 		return runCountries(args[1:], cfg, stdout, stderr)
 	case "connect":
@@ -520,11 +519,10 @@ func writeCountriesError(output io.Writer, err error) {
 	fmt.Fprintln(output, "mystvpn countries: request failed")
 }
 
-func runAuth(args []string, cfg config.Config, stdin *os.File, stdout, stderr io.Writer) int {
+func runAuth(args []string, cfg config.Config, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("auth", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	username := flags.String("username", "", "account username")
-	password := flags.String("password", "", "account password")
+	email := flags.String("email", "", "account email")
 	flags.Usage = func() {}
 
 	if err := flags.Parse(args); err != nil {
@@ -537,27 +535,8 @@ func runAuth(args []string, cfg config.Config, stdin *os.File, stdout, stderr io
 		fmt.Fprintf(stderr, "mystvpn auth: unexpected argument %q\n", flags.Arg(0))
 		return 2
 	}
-	if strings.TrimSpace(*username) == "" {
-		fmt.Fprintln(stderr, "mystvpn auth: --username is required")
-		return 2
-	}
-
-	passwordProvided := false
-	flags.Visit(func(option *flag.Flag) {
-		if option.Name == "password" {
-			passwordProvided = true
-		}
-	})
-	if !passwordProvided {
-		promptedPassword, err := promptPassword(stdin, stderr)
-		if err != nil {
-			fmt.Fprintf(stderr, "mystvpn auth: %v\n", err)
-			return 2
-		}
-		*password = promptedPassword
-	}
-	if *password == "" {
-		fmt.Fprintln(stderr, "mystvpn auth: --password must not be empty")
+	if strings.TrimSpace(*email) == "" {
+		fmt.Fprintln(stderr, "mystvpn auth: --email is required")
 		return 2
 	}
 
@@ -566,12 +545,12 @@ func runAuth(args []string, cfg config.Config, stdin *os.File, stdout, stderr io
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
-	if err := service.Login(context.Background(), *username, *password); err != nil {
+	if _, err := service.Start(context.Background(), *email); err != nil {
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
 
-	fmt.Fprintln(stdout, "Authentication successful.")
+	fmt.Fprintln(stdout, "Authentication link sent. Check your email.")
 	return 0
 }
 
@@ -613,6 +592,10 @@ func runLogout(args []string, cfg config.Config, stdout, stderr io.Writer, tunne
 		fmt.Fprintf(stderr, "mystvpn logout: %v\n", err)
 		return 1
 	}
+	if err := store.ClearPendingAuth(); err != nil {
+		fmt.Fprintf(stderr, "mystvpn logout: %v\n", err)
+		return 1
+	}
 
 	fmt.Fprintln(stdout, "Logout successful.")
 	return 0
@@ -627,21 +610,11 @@ func newAuthService(cfg config.Config) (*auth.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return auth.NewService(sentinelClient, store, cfg.Pool), nil
-}
-
-func promptPassword(stdin *os.File, output io.Writer) (string, error) {
-	if stdin == nil || !term.IsTerminal(int(stdin.Fd())) {
-		return "", errors.New("password is required; provide --password when standard input is not interactive")
-	}
-
-	fmt.Fprint(output, "Password: ")
-	password, err := term.ReadPassword(int(stdin.Fd()))
-	fmt.Fprintln(output)
-	if err != nil {
-		return "", fmt.Errorf("read password: %w", err)
-	}
-	return string(password), nil
+	return auth.NewService(sentinelClient, store, auth.Options{
+		Pool:           cfg.Pool,
+		CallbackURL:    cfg.AuthCallbackURL,
+		PendingAuthTTL: cfg.PendingAuthTTL,
+	}), nil
 }
 
 func isCommand(name string) bool {
@@ -662,7 +635,7 @@ func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "Commands:")
 	for _, command := range commands {
 		if command == "auth" {
-			fmt.Fprintln(output, "  auth --username <name> [--password <value>]")
+			fmt.Fprintln(output, "  auth --email <address>")
 			continue
 		}
 		if command == "countries" {

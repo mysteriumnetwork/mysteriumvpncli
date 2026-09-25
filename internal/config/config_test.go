@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -16,6 +17,12 @@ func TestLoadDefaults(t *testing.T) {
 	if DefaultPool != "dvpn" {
 		t.Errorf("DefaultPool = %q", DefaultPool)
 	}
+	if DefaultAuthCallbackURL != "http://127.0.0.1:53682/auth/callback" {
+		t.Errorf("DefaultAuthCallbackURL = %q", DefaultAuthCallbackURL)
+	}
+	if DefaultPendingAuthTTL != 10*time.Minute {
+		t.Errorf("DefaultPendingAuthTTL = %v", DefaultPendingAuthTTL)
+	}
 	if cfg.APIURL != DefaultAPIURL {
 		t.Errorf("APIURL = %q, want %q", cfg.APIURL, DefaultAPIURL)
 	}
@@ -24,6 +31,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Pool != DefaultPool {
 		t.Errorf("Pool = %q, want %q", cfg.Pool, DefaultPool)
+	}
+	if cfg.AuthCallbackURL != DefaultAuthCallbackURL {
+		t.Errorf("AuthCallbackURL = %q, want %q", cfg.AuthCallbackURL, DefaultAuthCallbackURL)
+	}
+	if cfg.PendingAuthTTL != DefaultPendingAuthTTL {
+		t.Errorf("PendingAuthTTL = %v, want %v", cfg.PendingAuthTTL, DefaultPendingAuthTTL)
 	}
 	if cfg.Debug {
 		t.Error("Debug = true, want false")

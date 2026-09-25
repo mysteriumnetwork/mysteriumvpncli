@@ -21,8 +21,8 @@ import (
 func TestRunConnect(t *testing.T) {
 	configureTestHome(t)
 	tokenStore := defaultTestStore(t)
-	if err := tokenStore.SaveAuthToken("auth-value"); err != nil {
-		t.Fatalf("SaveAuthToken() error = %v", err)
+	if err := tokenStore.SaveAccessToken("auth-value"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
 	}
 
 	var requestedPublicKey string
@@ -170,8 +170,8 @@ func TestWriteConnectRequestErrorReportsHTTPStatus(t *testing.T) {
 func TestRunConnectCleansStateWhenTunnelFails(t *testing.T) {
 	configureTestHome(t)
 	tokenStore := defaultTestStore(t)
-	if err := tokenStore.SaveAuthToken("auth-value"); err != nil {
-		t.Fatalf("SaveAuthToken() error = %v", err)
+	if err := tokenStore.SaveAccessToken("auth-value"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

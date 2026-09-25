@@ -64,7 +64,7 @@ func (s *Server) APIURL() string {
 	return s.server.URL + "/api/v1"
 }
 
-// SetAuthStatus overrides the password-auth response status. Zero restores success.
+// SetAuthStatus overrides the magic-link start response status. Zero restores success.
 func (s *Server) SetAuthStatus(statusCode int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -107,7 +107,7 @@ func (s *Server) Snapshot() Snapshot {
 
 func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch request.URL.Path {
-	case "/api/v1/auth/password":
+	case "/api/v1/auth/magic-link":
 		s.handleAuth(writer, request)
 	case "/api/v1/token/refresh":
 		s.handleTokenRefresh(writer, request)
@@ -128,11 +128,15 @@ func (s *Server) handleAuth(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Pool     string `json:"pool"`
+		Email               string `json:"email"`
+		State               string `json:"state"`
+		Nonce               string `json:"nonce"`
+		CodeChallenge       string `json:"code_challenge"`
+		CodeChallengeMethod string `json:"code_challenge_method"`
+		CallbackURL         string `json:"callback_url"`
+		Pool                string `json:"pool"`
 	}
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Username == "" || body.Password == "" || body.Pool == "" {
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Email == "" || body.State == "" || body.Nonce == "" || body.CodeChallenge == "" || body.CodeChallengeMethod != "S256" || body.CallbackURL == "" || body.Pool == "" {
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -145,10 +149,7 @@ func (s *Server) handleAuth(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(statusCode)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{
-		"auth_token":    authToken,
-		"refresh_token": refreshToken,
-	})
+	writer.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Server) handleTokenRefresh(writer http.ResponseWriter, request *http.Request) {
@@ -157,9 +158,9 @@ func (s *Server) handleTokenRefresh(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	var body struct {
-		Token string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
 	}
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Token != refreshToken {
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.RefreshToken != refreshToken {
 		writer.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -167,7 +168,7 @@ func (s *Server) handleTokenRefresh(writer http.ResponseWriter, request *http.Re
 	s.tokenRefreshCalls++
 	s.mu.Unlock()
 	writeJSON(writer, http.StatusOK, map[string]string{
-		"auth_token":    authToken,
+		"access_token":  authToken,
 		"refresh_token": refreshToken,
 	})
 }

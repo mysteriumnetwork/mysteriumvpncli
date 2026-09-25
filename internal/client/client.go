@@ -71,12 +71,17 @@ func New(baseURL string, timeout time.Duration, debug bool) (*Client, error) {
 	}, nil
 }
 
-// SetToken sets the bearer token included in subsequent requests. Passing an
-// empty token removes the Authorization header.
-func (c *Client) SetToken(token string) {
+// SetAccessToken sets the bearer token included in subsequent requests.
+// Passing an empty token removes the Authorization header.
+func (c *Client) SetAccessToken(token string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.token = strings.TrimSpace(token)
+}
+
+// SetToken is retained for callers that do not distinguish token types.
+func (c *Client) SetToken(token string) {
+	c.SetAccessToken(token)
 }
 
 // SetUnauthorizedHandler sets a callback that obtains a new bearer token after
@@ -172,7 +177,7 @@ func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, r
 				if strings.TrimSpace(token) == "" {
 					return response.StatusCode, errors.New("refresh authorization: empty auth token")
 				}
-				c.SetToken(token)
+				c.SetAccessToken(token)
 				refreshed = true
 				continue
 			}

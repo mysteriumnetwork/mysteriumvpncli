@@ -38,10 +38,11 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	}
 
 	assertCommandResult(t, execute("status"), 0, "connected: no\n", "")
-	assertCommandResult(t, execute("auth", "--username", "alice", "--password", "secret"), 0, "Authentication successful.\n", "")
+	assertCommandResult(t, execute("auth", "--email", "alice@example.com"), 0, "Authentication link sent. Check your email.\n", "")
+	saveEndToEndTokens(t)
 
 	credentialsDirectory := filepath.Join(testConfigDirectory(t), "mystvpn", "credentials")
-	assertFileMode(t, filepath.Join(credentialsDirectory, "auth_token"), 0o600)
+	assertFileMode(t, filepath.Join(credentialsDirectory, "access_token"), 0o600)
 	assertFileMode(t, filepath.Join(credentialsDirectory, "refresh_token"), 0o600)
 	assertFileMode(t, credentialsDirectory, 0o700)
 
@@ -91,8 +92,8 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth.NewDefaultFileStore() error = %v", err)
 	}
-	if _, err := tokenStore.LoadAuthToken(); !errors.Is(err, auth.ErrTokenNotFound) {
-		t.Errorf("LoadAuthToken() error = %v, want ErrTokenNotFound", err)
+	if _, err := tokenStore.LoadAccessToken(); !errors.Is(err, auth.ErrTokenNotFound) {
+		t.Errorf("LoadAccessToken() error = %v, want ErrTokenNotFound", err)
 	}
 	if _, err := tokenStore.LoadRefreshToken(); !errors.Is(err, auth.ErrTokenNotFound) {
 		t.Errorf("LoadRefreshToken() error = %v, want ErrTokenNotFound", err)
@@ -140,7 +141,8 @@ func TestCLIConnectReplacesActiveSession(t *testing.T) {
 	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--username", "alice", "--password", "secret"}, cfg, runner), 0, "Authentication successful.\n", "")
+	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\n", "")
+	saveEndToEndTokens(t)
 	assertCommandResult(
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "residential"}, cfg, runner),
@@ -192,7 +194,8 @@ func TestCLILogoutDisconnectsActiveSession(t *testing.T) {
 	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--username", "alice", "--password", "secret"}, cfg, runner), 0, "Authentication successful.\n", "")
+	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\n", "")
+	saveEndToEndTokens(t)
 	assertCommandResult(
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "residential"}, cfg, runner),
@@ -217,8 +220,8 @@ func TestCLILogoutDisconnectsActiveSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth.NewDefaultFileStore() error = %v", err)
 	}
-	if _, err := tokenStore.LoadAuthToken(); !errors.Is(err, auth.ErrTokenNotFound) {
-		t.Errorf("LoadAuthToken() error = %v, want ErrTokenNotFound", err)
+	if _, err := tokenStore.LoadAccessToken(); !errors.Is(err, auth.ErrTokenNotFound) {
+		t.Errorf("LoadAccessToken() error = %v, want ErrTokenNotFound", err)
 	}
 }
 
@@ -230,18 +233,15 @@ func TestCLIAuthenticationFailureEndToEnd(t *testing.T) {
 
 	cfg := config.Load()
 	cfg.SentinelURL = server.SentinelURL()
-	result := executeCLI([]string{"auth", "--username", "alice", "--password", "wrong"}, cfg, &endToEndTunnelRunner{})
+	result := executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, &endToEndTunnelRunner{})
 
 	assertCommandResult(t, result, 1, "", "mystvpn auth: HTTP status 401\n")
-	if strings.Contains(result.stdout+result.stderr, "wrong") {
-		t.Error("authentication failure output exposed the password")
-	}
 	store, err := auth.NewDefaultFileStore()
 	if err != nil {
 		t.Fatalf("auth.NewDefaultFileStore() error = %v", err)
 	}
-	if _, err := store.LoadAuthToken(); !errors.Is(err, auth.ErrTokenNotFound) {
-		t.Errorf("LoadAuthToken() error = %v, want ErrTokenNotFound", err)
+	if _, err := store.LoadAccessToken(); !errors.Is(err, auth.ErrTokenNotFound) {
+		t.Errorf("LoadAccessToken() error = %v, want ErrTokenNotFound", err)
 	}
 }
 
@@ -254,7 +254,8 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--username", "alice", "--password", "secret"}, cfg, runner), 0, "Authentication successful.\n", "")
+	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\n", "")
+	saveEndToEndTokens(t)
 
 	server.SetConnectStatus(http.StatusForbidden)
 	assertCommandResult(
@@ -358,6 +359,22 @@ func loadEndToEndSession(t *testing.T) state.Session {
 		t.Fatalf("session Load() error = %v", err)
 	}
 	return session
+}
+
+// saveEndToEndTokens represents completion by the browser callback, which is
+// intentionally outside the scope of the auth-foundation commit.
+func saveEndToEndTokens(t *testing.T) {
+	t.Helper()
+	store, err := auth.NewDefaultFileStore()
+	if err != nil {
+		t.Fatalf("auth.NewDefaultFileStore() error = %v", err)
+	}
+	if err := store.SaveAccessToken("test-auth-token"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
+	}
+	if err := store.SaveRefreshToken("test-refresh-token"); err != nil {
+		t.Fatalf("SaveRefreshToken() error = %v", err)
+	}
 }
 
 func testConfigDirectory(t *testing.T) string {
