@@ -2,8 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -18,275 +16,201 @@ import (
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/client"
 )
 
-func TestGeneratePKCE(t *testing.T) {
-	verifier, challenge, err := GeneratePKCE()
-	if err != nil {
-		t.Fatalf("GeneratePKCE() error = %v", err)
-	}
-	if len(verifier) < 43 || len(verifier) > 128 {
-		t.Errorf("verifier length = %d, want RFC 7636 range", len(verifier))
-	}
-	if _, err := base64.RawURLEncoding.DecodeString(verifier); err != nil {
-		t.Errorf("verifier is not unpadded base64url: %v", err)
-	}
-	digest := sha256.Sum256([]byte(verifier))
-	wantChallenge := base64.RawURLEncoding.EncodeToString(digest[:])
-	if challenge != wantChallenge {
-		t.Errorf("challenge = %q, want SHA-256 challenge %q", challenge, wantChallenge)
-	}
+func TestStartCreatesActivationForOKAndNoContent(t *testing.T) {
+	for _, statusCode := range []int{http.StatusOK, http.StatusNoContent} {
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			fixedNow := time.Date(2026, time.September, 29, 10, 0, 0, 0, time.UTC)
+			var body map[string]string
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodPost || request.URL.Path != "/api/v1/auth/activation" {
+					t.Errorf("request = %s %s, want POST /api/v1/auth/activation", request.Method, request.URL.Path)
+				}
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				writer.WriteHeader(statusCode)
+			}))
+			defer server.Close()
 
-	secondVerifier, _, err := GeneratePKCE()
-	if err != nil {
-		t.Fatalf("second GeneratePKCE() error = %v", err)
-	}
-	if secondVerifier == verifier {
-		t.Error("two generated PKCE verifiers are identical")
+			store := &memoryCredentialStore{}
+			service := newTestService(t, server.URL, store)
+			service.now = func() time.Time { return fixedNow }
+			result, err := service.Start(context.Background())
+			if err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+
+			if len(body) != 1 || body["id"] == "" || !isUUID(body["id"]) {
+				t.Errorf("request body = %v, want only a UUID id", body)
+			}
+			if result.Pending.ActivationID != body["id"] {
+				t.Errorf("pending activation ID = %q, want %q", result.Pending.ActivationID, body["id"])
+			}
+			if want := fixedNow.Add(5 * time.Minute); !result.Pending.ExpiresAt.Equal(want) {
+				t.Errorf("expiry = %v, want %v", result.Pending.ExpiresAt, want)
+			}
+			parsed, err := url.Parse(result.AuthorizationURL)
+			if err != nil {
+				t.Fatalf("parse authorization URL: %v", err)
+			}
+			if parsed.Scheme != "https" || parsed.Host != "app.mysteriumvpn.com" || parsed.Path != "/oauth/authorize" {
+				t.Errorf("authorization URL = %q", result.AuthorizationURL)
+			}
+			if parsed.Query().Get("response_type") != "activation_none" || parsed.Query().Get("client_id") != "cli" || parsed.Query().Get("request_id") != body["id"] {
+				t.Errorf("authorization query = %v", parsed.Query())
+			}
+			stored, err := store.LoadPendingAuth()
+			if err != nil || stored != result.Pending {
+				t.Errorf("stored pending auth = %+v, error = %v", stored, err)
+			}
+		})
 	}
 }
 
-func TestStartSendsMagicLinkRequestAndStoresPendingAuth(t *testing.T) {
-	fixedNow := time.Date(2026, time.September, 25, 10, 0, 0, 0, time.UTC)
-	var requestBody startAuthRequest
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost {
-			t.Errorf("method = %s, want POST", request.Method)
-		}
-		if request.URL.Path != "/api/v1/magic-link" {
-			t.Errorf("path = %q, want /api/v1/magic-link", request.URL.Path)
-		}
-		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		writer.WriteHeader(http.StatusAccepted)
-		_, _ = writer.Write([]byte(`{"auth_url":"https://auth.example.com/continue"}`))
-	}))
+func TestStartGeneratesUniqueActivationIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {}))
 	defer server.Close()
-
 	store := &memoryCredentialStore{}
 	service := newTestService(t, server.URL, store)
-	service.now = func() time.Time { return fixedNow }
-	result, err := service.Start(context.Background(), "alice@example.com", "http://127.0.0.1:54321/auth/callback")
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
 
-	if requestBody.Email != "alice@example.com" || requestBody.ClientID != "dvpn" {
-		t.Errorf("request identity = %+v", requestBody)
-	}
-	if result.AuthURL != "https://auth.example.com/continue" {
-		t.Errorf("auth URL = %q", result.AuthURL)
-	}
-	if requestBody.CodeChallenge == "" {
-		t.Errorf("request is missing generated security fields: %+v", requestBody)
-	}
-	if requestBody.CodeChallengeMethod != "S256" {
-		t.Errorf("challenge method = %q, want S256", requestBody.CodeChallengeMethod)
-	}
-	pending := result.Pending
-	if pending.CodeVerifier == "" || pending.CodeVerifier == pending.CodeChallenge {
-		t.Error("pending auth does not contain a distinct PKCE verifier")
-	}
-	continueTo, err := url.Parse(requestBody.ContinueTo)
+	first, err := service.Start(context.Background())
 	if err != nil {
-		t.Fatalf("parse continue_to: %v", err)
+		t.Fatalf("first Start() error = %v", err)
 	}
-	if continueTo.Scheme != "http" || continueTo.Host != "127.0.0.1:54321" || continueTo.Path != "/auth/callback" {
-		t.Errorf("continue_to = %q, want loopback callback", requestBody.ContinueTo)
+	second, err := service.Start(context.Background())
+	if err != nil {
+		t.Fatalf("second Start() error = %v", err)
 	}
-	if continueTo.Query().Get("state") != pending.State || continueTo.Query().Get("nonce") != pending.Nonce || pending.CodeChallenge != requestBody.CodeChallenge {
-		t.Error("stored pending auth does not match start request")
-	}
-	if want := fixedNow.Add(10 * time.Minute); !pending.ExpiresAt.Equal(want) {
-		t.Errorf("expiry = %v, want %v", pending.ExpiresAt, want)
-	}
-	stored, err := store.LoadPendingAuth()
-	if err != nil || stored != pending {
-		t.Errorf("stored pending auth = %+v, error = %v", stored, err)
+	if first.Pending.ActivationID == second.Pending.ActivationID {
+		t.Errorf("activation IDs are identical: %q", first.Pending.ActivationID)
 	}
 }
 
 func TestStartFailureClearsPendingAuthAndReportsStatusOnly(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusTooManyRequests)
+		writer.WriteHeader(http.StatusBadRequest)
 		_, _ = writer.Write([]byte(`{"message":"internal detail"}`))
 	}))
 	defer server.Close()
 
 	store := &memoryCredentialStore{}
 	service := newTestService(t, server.URL, store)
-	_, err := service.Start(context.Background(), "alice@example.com", "http://127.0.0.1:54321/auth/callback")
+	_, err := service.Start(context.Background())
 	var statusErr *HTTPStatusError
-	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusTooManyRequests {
-		t.Fatalf("Start() error = %v, want HTTP status 429", err)
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Start() error = %v, want HTTP status 400", err)
 	}
-	if err.Error() != "HTTP status 429" {
+	if err.Error() != "HTTP status 400" {
 		t.Errorf("error = %q, want status only", err)
 	}
-	if _, err := store.LoadPendingAuth(); !errors.Is(err, ErrPendingAuthNotFound) {
-		t.Errorf("LoadPendingAuth() error = %v, want cleared state", err)
-	}
+	assertPendingCleared(t, store)
 }
 
-func TestStartWithoutCallbackOmitsContinueTo(t *testing.T) {
-	var requestBody startAuthRequest
+func TestPollContinuesUntilActivationHasTokens(t *testing.T) {
+	pending := testPendingAuth()
+	store := &memoryCredentialStore{pending: &pending}
+	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
-			t.Fatalf("decode request: %v", err)
+		call := calls.Add(1)
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/auth/activation/"+pending.ActivationID {
+			t.Errorf("request = %s %s", request.Method, request.URL.Path)
 		}
-		writer.WriteHeader(http.StatusAccepted)
-	}))
-	defer server.Close()
-
-	store := &memoryCredentialStore{}
-	service := newTestService(t, server.URL, store)
-	result, err := service.Start(context.Background(), "alice@example.com", "")
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if requestBody.ContinueTo != "" || result.Pending.CallbackURL != "" {
-		t.Errorf("callback URL = %q, continue_to = %q; want both omitted", result.Pending.CallbackURL, requestBody.ContinueTo)
-	}
-	if result.Pending.CodeVerifier == "" || result.Pending.State == "" || result.Pending.Nonce == "" {
-		t.Errorf("pending fallback authentication is incomplete: %+v", result.Pending)
-	}
-}
-
-func TestCompleteCallbackStoresAuthorizationCode(t *testing.T) {
-	pending := testPendingAuth()
-	store := &memoryCredentialStore{pending: &pending}
-	service := newTestService(t, "http://127.0.0.1:1", store)
-	service.now = func() time.Time { return pending.ExpiresAt.Add(-time.Minute) }
-
-	err := service.CompleteCallback(CallbackResult{
-		AuthorizationCode: "authorization-code",
-		State:             pending.State,
-		Nonce:             pending.Nonce,
-	})
-	if err != nil {
-		t.Fatalf("CompleteCallback() error = %v", err)
-	}
-	stored, err := store.LoadPendingAuth()
-	if err != nil {
-		t.Fatalf("LoadPendingAuth() error = %v", err)
-	}
-	if stored.AuthorizationCode != "authorization-code" {
-		t.Errorf("authorization code = %q, want saved code", stored.AuthorizationCode)
-	}
-}
-
-func TestCompleteCodeStoresTrimmedAuthorizationCode(t *testing.T) {
-	pending := testPendingAuth()
-	store := &memoryCredentialStore{pending: &pending}
-	service := newTestService(t, "http://127.0.0.1:1", store)
-	service.now = func() time.Time { return pending.ExpiresAt.Add(-time.Minute) }
-
-	if err := service.CompleteCode("  pasted-authorization-code  "); err != nil {
-		t.Fatalf("CompleteCode() error = %v", err)
-	}
-	stored, err := store.LoadPendingAuth()
-	if err != nil {
-		t.Fatalf("LoadPendingAuth() error = %v", err)
-	}
-	if stored.AuthorizationCode != "pasted-authorization-code" {
-		t.Errorf("authorization code = %q, want trimmed pasted code", stored.AuthorizationCode)
-	}
-}
-
-func TestExchangeUsesPendingPKCEAndStoresTokens(t *testing.T) {
-	pending := testPendingAuth()
-	pending.AuthorizationCode = "authorization-code"
-	store := &memoryCredentialStore{pending: &pending}
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost {
-			t.Errorf("method = %s, want POST", request.Method)
+		writer.Header().Set("Content-Type", "application/json")
+		switch call {
+		case 1:
+			_, _ = writer.Write([]byte(`{"id":"` + pending.ActivationID + `","valid":true,"token":null}`))
+		case 2:
+			_, _ = writer.Write([]byte(`{"id":"` + pending.ActivationID + `","valid":true,"token":{"access_token":"not-ready"}}`))
+		default:
+			_, _ = writer.Write([]byte(`{"id":"` + pending.ActivationID + `","valid":true,"token":{"access_token":"access-value","refresh_token":"refresh-value","token_type":"Bearer","expires_in":3600,"user_id":"user-123"}}`))
 		}
-		if request.URL.Path != "/api/v1/oauth/token" {
-			t.Errorf("path = %q, want /api/v1/oauth/token", request.URL.Path)
-		}
-		var body tokenRequest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatalf("decode token request: %v", err)
-		}
-		if body.GrantType != authorizationGrant || body.Code != pending.AuthorizationCode || body.ClientID != "dvpn" || body.CodeVerifier != pending.CodeVerifier || body.Device != "test-device" {
-			t.Errorf("token request = %+v, want authorization-code grant and saved PKCE context", body)
-		}
-		if body.RefreshToken != "" {
-			t.Errorf("token request unexpectedly contains refresh token")
-		}
-		_, _ = writer.Write([]byte(`{"access_token":"access-value","refresh_token":"refresh-value","token_type":"Bearer","expires_in":3600,"user_id":"user-123"}`))
 	}))
 	defer server.Close()
 
 	service := newTestService(t, server.URL, store)
-	service.now = func() time.Time { return pending.ExpiresAt.Add(-time.Minute) }
-	if err := service.Exchange(context.Background()); err != nil {
-		t.Fatalf("Exchange() error = %v", err)
+	if err := service.Poll(context.Background()); err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	if calls.Load() != 3 {
+		t.Errorf("poll calls = %d, want 3", calls.Load())
 	}
 	if store.accessToken != "access-value" || store.refreshToken != "refresh-value" {
 		t.Errorf("stored tokens = %q, %q", store.accessToken, store.refreshToken)
 	}
-	if _, err := store.LoadPendingAuth(); !errors.Is(err, ErrPendingAuthNotFound) {
-		t.Errorf("LoadPendingAuth() error = %v, want cleared state", err)
-	}
+	assertPendingCleared(t, store)
 }
 
-func TestExchangeRejectsExpiredPendingAuth(t *testing.T) {
+func TestPollRejectsInvalidActivation(t *testing.T) {
 	pending := testPendingAuth()
-	pending.AuthorizationCode = "authorization-code"
-	store := &memoryCredentialStore{pending: &pending}
-	service := newTestService(t, "http://127.0.0.1:1", store)
-	service.now = func() time.Time { return pending.ExpiresAt }
-
-	err := service.Exchange(context.Background())
-	if !errors.Is(err, ErrPendingAuthExpired) {
-		t.Fatalf("Exchange() error = %v, want ErrPendingAuthExpired", err)
-	}
-	if _, err := store.LoadPendingAuth(); !errors.Is(err, ErrPendingAuthNotFound) {
-		t.Errorf("LoadPendingAuth() error = %v, want cleared state", err)
-	}
-}
-
-func TestExchangeRejectsInvalidTokenResponseWithoutSavingTokens(t *testing.T) {
-	pending := testPendingAuth()
-	pending.AuthorizationCode = "authorization-code"
 	store := &memoryCredentialStore{pending: &pending}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		_, _ = writer.Write([]byte(`{"access_token":"access-value","refresh_token":"refresh-value","token_type":"mac","expires_in":3600}`))
+		_, _ = writer.Write([]byte(`{"id":"` + pending.ActivationID + `","valid":false,"token":null}`))
 	}))
 	defer server.Close()
 
 	service := newTestService(t, server.URL, store)
-	service.now = func() time.Time { return pending.ExpiresAt.Add(-time.Minute) }
-	err := service.Exchange(context.Background())
-	if err == nil || err.Error() != "authentication response contained an unsupported token type" {
-		t.Fatalf("Exchange() error = %v, want unsupported token type", err)
+	if err := service.Poll(context.Background()); !errors.Is(err, ErrActivationInvalid) {
+		t.Fatalf("Poll() error = %v, want ErrActivationInvalid", err)
 	}
-	if store.accessToken != "" || store.refreshToken != "" {
-		t.Errorf("invalid response saved tokens = %q, %q", store.accessToken, store.refreshToken)
-	}
+	assertPendingCleared(t, store)
 }
 
-func TestExchangeReportsHTTPFailureWithoutResponseDetails(t *testing.T) {
+func TestPollRejectsMalformedCompletedToken(t *testing.T) {
 	pending := testPendingAuth()
-	pending.AuthorizationCode = "authorization-code"
+	store := &memoryCredentialStore{pending: &pending}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"id":"` + pending.ActivationID + `","valid":true,"token":{"access_token":"access","refresh_token":"refresh","token_type":"mac","expires_in":3600}}`))
+	}))
+	defer server.Close()
+
+	service := newTestService(t, server.URL, store)
+	err := service.Poll(context.Background())
+	if err == nil || err.Error() != "authentication response contained an unsupported token type" {
+		t.Fatalf("Poll() error = %v, want unsupported token type", err)
+	}
+	if store.accessToken != "" || store.refreshToken != "" {
+		t.Error("malformed response saved tokens")
+	}
+	assertPendingCleared(t, store)
+}
+
+func TestPollTimesOutAndClearsPendingAuth(t *testing.T) {
+	pending := testPendingAuth()
+	pending.ExpiresAt = time.Now().Add(30 * time.Millisecond)
+	store := &memoryCredentialStore{pending: &pending}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = writer.Write([]byte(`{"id":"` + pending.ActivationID + `","valid":true,"token":null}`))
+	}))
+	defer server.Close()
+
+	service := newTestService(t, server.URL, store)
+	if err := service.Poll(context.Background()); !errors.Is(err, ErrAuthenticationTimedOut) {
+		t.Fatalf("Poll() error = %v, want timeout", err)
+	}
+	if calls.Load() < 2 {
+		t.Errorf("poll calls = %d, want at least 2", calls.Load())
+	}
+	assertPendingCleared(t, store)
+}
+
+func TestPollReportsHTTPFailureAndClearsPendingAuth(t *testing.T) {
+	pending := testPendingAuth()
 	store := &memoryCredentialStore{pending: &pending}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusUnauthorized)
-		_, _ = writer.Write([]byte(`{"message":"authorization code detail must remain private"}`))
+		_, _ = writer.Write([]byte(`{"message":"do not expose"}`))
 	}))
 	defer server.Close()
 
 	service := newTestService(t, server.URL, store)
-	service.now = func() time.Time { return pending.ExpiresAt.Add(-time.Minute) }
-	err := service.Exchange(context.Background())
+	err := service.Poll(context.Background())
 	var statusErr *HTTPStatusError
-	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("Exchange() error = %v, want HTTP status 401", err)
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusUnauthorized || strings.Contains(err.Error(), "do not expose") {
+		t.Fatalf("Poll() error = %v, want status-only 401", err)
 	}
-	if err.Error() != "HTTP status 401" {
-		t.Errorf("error = %q, want status only", err)
-	}
+	assertPendingCleared(t, store)
 }
 
 func TestConfiguredClientRefreshesUsingRefreshTokenContract(t *testing.T) {
@@ -294,19 +218,16 @@ func TestConfiguredClientRefreshesUsingRefreshTokenContract(t *testing.T) {
 	authServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		refreshCalls.Add(1)
 		if request.URL.Path != "/api/v1/oauth/token" {
-			t.Errorf("path = %q, want /api/v1/oauth/token", request.URL.Path)
+			t.Errorf("path = %q", request.URL.Path)
 		}
-		var body tokenRequest
+		var body map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatalf("decode refresh request: %v", err)
 		}
-		if body.GrantType != refreshTokenGrant || body.RefreshToken != "old-refresh" || body.ClientID != "dvpn" {
-			t.Errorf("refresh request = %+v, want refresh-token grant", body)
+		if len(body) != 3 || body["grant_type"] != "refresh_token" || body["refresh_token"] != "old-refresh" || body["client_id"] != "cli" {
+			t.Errorf("refresh request = %+v", body)
 		}
-		if body.Code != "" || body.CodeVerifier != "" || body.Device != "" {
-			t.Errorf("refresh request unexpectedly contains authorization-code fields")
-		}
-		_, _ = writer.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600,"user_id":"user-123"}`))
+		_, _ = writer.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`))
 	}))
 	defer authServer.Close()
 
@@ -330,7 +251,6 @@ func TestConfiguredClientRefreshesUsingRefreshTokenContract(t *testing.T) {
 	if err := service.ConfigureClient(apiClient); err != nil {
 		t.Fatalf("ConfigureClient() error = %v", err)
 	}
-
 	var response struct {
 		OK bool `json:"ok"`
 	}
@@ -338,42 +258,10 @@ func TestConfiguredClientRefreshesUsingRefreshTokenContract(t *testing.T) {
 		t.Fatalf("Get() error = %v", err)
 	}
 	if !response.OK || apiCalls.Load() != 2 || refreshCalls.Load() != 1 {
-		t.Errorf("response OK = %v, API calls = %d, refresh calls = %d", response.OK, apiCalls.Load(), refreshCalls.Load())
+		t.Errorf("OK = %v, API calls = %d, refresh calls = %d", response.OK, apiCalls.Load(), refreshCalls.Load())
 	}
 	if store.accessToken != "new-access" || store.refreshToken != "new-refresh" {
 		t.Errorf("stored tokens = %q, %q", store.accessToken, store.refreshToken)
-	}
-}
-
-func TestConfiguredClientReportsInvalidRefreshWithoutLeakingResponse(t *testing.T) {
-	authServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusUnauthorized)
-		_, _ = writer.Write([]byte(`{"message":"refresh token detail must remain private"}`))
-	}))
-	defer authServer.Close()
-
-	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer api.Close()
-
-	store := &memoryCredentialStore{accessToken: "expired-access", refreshToken: "invalid-refresh"}
-	service := newTestService(t, authServer.URL, store)
-	apiClient, err := client.New(api.URL, time.Second, false)
-	if err != nil {
-		t.Fatalf("client.New() error = %v", err)
-	}
-	if err := service.ConfigureClient(apiClient); err != nil {
-		t.Fatalf("ConfigureClient() error = %v", err)
-	}
-
-	err = apiClient.Get(context.Background(), "/protected", nil)
-	var statusErr *HTTPStatusError
-	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("Get() error = %v, want refresh HTTP status 401", err)
-	}
-	if strings.Contains(err.Error(), "refresh token detail") || strings.Contains(err.Error(), "invalid-refresh") {
-		t.Errorf("Get() error exposed sensitive response data: %q", err)
 	}
 }
 
@@ -384,21 +272,24 @@ func newTestService(t *testing.T, authURL string, store CredentialStore) *Servic
 		t.Fatalf("client.New() error = %v", err)
 	}
 	return NewService(authClient, store, Options{
-		ClientID:       "dvpn",
-		Device:         "test-device",
-		PendingAuthTTL: 10 * time.Minute,
+		ClientID:         "cli",
+		AuthorizationURL: "https://app.mysteriumvpn.com/oauth/authorize",
+		PollInterval:     time.Millisecond,
+		AuthTimeout:      5 * time.Minute,
 	})
 }
 
 func testPendingAuth() PendingAuth {
 	return PendingAuth{
-		Email:         "alice@example.com",
-		State:         "state-value",
-		Nonce:         "nonce-value",
-		CodeVerifier:  "verifier-value",
-		CodeChallenge: "challenge-value",
-		CallbackURL:   "http://127.0.0.1:53682/auth/callback",
-		ExpiresAt:     time.Date(2026, time.September, 25, 10, 10, 0, 0, time.UTC),
+		ActivationID: "223e4567-e89b-42d3-a456-426614174000",
+		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
+	}
+}
+
+func assertPendingCleared(t *testing.T, store CredentialStore) {
+	t.Helper()
+	if _, err := store.LoadPendingAuth(); !errors.Is(err, ErrPendingAuthNotFound) {
+		t.Errorf("LoadPendingAuth() error = %v, want cleared state", err)
 	}
 }
 

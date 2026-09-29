@@ -7,9 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,6 +16,12 @@ import (
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/client"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/config"
 )
+
+type testTokenRequest struct {
+	GrantType    string `json:"grant_type"`
+	ClientID     string `json:"client_id"`
+	RefreshToken string `json:"refresh_token"`
+}
 
 func TestRunWithoutArgumentsPrintsUsage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -57,7 +60,7 @@ func TestRunHelpListsCommands(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0", exitCode)
 	}
-	for _, expected := range []string{"help", "version", "auth --email <address>", "countries --ip-type <residential|hosting>", "disconnect"} {
+	for _, expected := range []string{"help", "version", "  auth\n", "countries --ip-type <residential|hosting>", "disconnect"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("help output does not contain %q: %q", expected, stdout.String())
 		}
@@ -104,34 +107,28 @@ func TestRunRejectsRootFlags(t *testing.T) {
 
 func TestRunAuth(t *testing.T) {
 	configureTestHome(t)
+	var activationID string
+	var pollCalls atomic.Int32
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/v1/magic-link":
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/auth/activation":
 			var body map[string]string
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Fatalf("decode request: %v", err)
 			}
-			if body["email"] != "alice@example.com" || body["client_id"] != "dvpn" || body["continue_to"] == "" {
-				t.Errorf("request body = %v, want email, client ID, and continue URL", body)
+			activationID = body["id"]
+			if len(body) != 1 || activationID == "" {
+				t.Errorf("request body = %v, want only activation id", body)
 			}
-			if body["code_challenge"] == "" {
-				t.Error("request body is missing code_challenge")
+			writer.WriteHeader(http.StatusOK)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/auth/activation/"+activationID:
+			call := pollCalls.Add(1)
+			if call < 2 {
+				_, _ = writer.Write([]byte(`{"id":"` + activationID + `","valid":true,"token":null}`))
+				return
 			}
-			if body["code_challenge_method"] != "S256" {
-				t.Errorf("code challenge method = %q, want S256", body["code_challenge_method"])
-			}
-			writer.WriteHeader(http.StatusAccepted)
-			go sendTestAuthCallback(body["continue_to"])
-		case "/api/v1/oauth/token":
-			var body map[string]string
-			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-				t.Fatalf("decode token request: %v", err)
-			}
-			if body["grant_type"] != "authorization_code" || body["code"] != "test-authorization-code" || body["client_id"] != "dvpn" || body["code_verifier"] == "" {
-				t.Errorf("token request body = %v, want authorization-code exchange", body)
-			}
-			_, _ = writer.Write([]byte(`{"access_token":"test-access-token","refresh_token":"test-refresh-token","token_type":"Bearer","expires_in":3600,"user_id":"user-123"}`))
+			_, _ = writer.Write([]byte(`{"id":"` + activationID + `","valid":true,"token":{"access_token":"test-access-token","refresh_token":"test-refresh-token","token_type":"Bearer","expires_in":3600,"user_id":"user-123"}}`))
 		default:
 			http.NotFound(writer, request)
 		}
@@ -140,10 +137,11 @@ func TestRunAuth(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
-	cfg.SentinelURL = server.URL + "/api/v1"
-	cfg.AuthCallbackTimeout = 2 * time.Second
+	cfg.APIURL = server.URL + "/api/v1"
+	cfg.AuthPollInterval = time.Millisecond
+	cfg.AuthTimeout = time.Second
 	exitCode := runWithConfig(
-		[]string{"auth", "--email", "alice@example.com"},
+		[]string{"auth"},
 		nil,
 		&stdout,
 		&stderr,
@@ -153,8 +151,15 @@ func TestRunAuth(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	if stdout.String() != "Authentication link sent. Check your email.\nAuthentication successful.\n" {
-		t.Errorf("stdout = %q, want success message", stdout.String())
+	wantOutput := "Open this URL in your browser to authenticate:\n" +
+		"https://app.mysteriumvpn.com/oauth/authorize?client_id=cli&request_id=" + activationID + "&response_type=activation_none\n" +
+		"Waiting for authentication approval...\n" +
+		"Authentication successful.\n"
+	if stdout.String() != wantOutput {
+		t.Errorf("stdout = %q, want %q", stdout.String(), wantOutput)
+	}
+	if pollCalls.Load() != 2 {
+		t.Errorf("poll calls = %d, want 2", pollCalls.Load())
 	}
 	store, err := auth.NewDefaultFileStore()
 	if err != nil {
@@ -173,96 +178,34 @@ func TestRunAuth(t *testing.T) {
 	}
 }
 
-func TestRunAuthFallsBackToPastedCode(t *testing.T) {
+func TestRunAuthTimesOutAndClearsPendingState(t *testing.T) {
 	configureTestHome(t)
-	var codeVerifier string
+	var pollCalls atomic.Int32
+	var activationID string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/v1/magic-link":
-			writer.WriteHeader(http.StatusAccepted)
-		case "/api/v1/oauth/token":
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/auth/activation":
 			var body map[string]string
-			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-				t.Fatalf("decode token request: %v", err)
-			}
-			codeVerifier = body["code_verifier"]
-			if body["grant_type"] != "authorization_code" || body["code"] != "pasted-authorization-code" || codeVerifier == "" {
-				t.Errorf("token request body = %v, want pasted code and saved PKCE verifier", body)
-			}
-			_, _ = writer.Write([]byte(`{"access_token":"fallback-access-token","refresh_token":"fallback-refresh-token","token_type":"Bearer","expires_in":3600}`))
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			activationID = body["id"]
+			writer.WriteHeader(http.StatusNoContent)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/auth/activation/"+activationID:
+			pollCalls.Add(1)
+			_, _ = writer.Write([]byte(`{"id":"` + activationID + `","valid":true,"token":null}`))
 		default:
 			http.NotFound(writer, request)
 		}
 	}))
 	defer server.Close()
 
-	stdin := authCodeInput(t, "pasted-authorization-code")
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
-	cfg.SentinelURL = server.URL + "/api/v1"
-	cfg.AuthCallbackTimeout = 20 * time.Millisecond
-	cfg.AuthCodeInputTimeout = time.Second
+	cfg.APIURL = server.URL + "/api/v1"
+	cfg.AuthPollInterval = 5 * time.Millisecond
+	cfg.AuthTimeout = 25 * time.Millisecond
 	exitCode := runWithConfig(
-		[]string{"auth", "--email", "alice@example.com"},
-		stdin,
-		&stdout,
-		&stderr,
-		cfg,
-	)
-
-	if exitCode != 0 {
-		t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
-	}
-	wantOutput := "Authentication link sent. Check your email.\n" +
-		"Browser callback not received. Paste the authorization code to continue.\n" +
-		"Open the authentication link from your email in a browser.\n" +
-		"Authorization code:\n" +
-		"Authentication successful.\n"
-	if stdout.String() != wantOutput {
-		t.Errorf("stdout = %q, want %q", stdout.String(), wantOutput)
-	}
-	if stderr.Len() != 0 {
-		t.Errorf("stderr = %q, want empty", stderr.String())
-	}
-	combinedOutput := stdout.String() + stderr.String()
-	for _, secret := range []string{"pasted-authorization-code", "fallback-access-token", "fallback-refresh-token", codeVerifier} {
-		if secret != "" && strings.Contains(combinedOutput, secret) {
-			t.Errorf("CLI output exposed secret %q", secret)
-		}
-	}
-
-	credentialsDirectory := filepath.Join(testConfigDirectory(t), "mystvpn", "credentials")
-	assertFileMode(t, credentialsDirectory, 0o700)
-	assertFileMode(t, filepath.Join(credentialsDirectory, "access_token"), 0o600)
-	assertFileMode(t, filepath.Join(credentialsDirectory, "refresh_token"), 0o600)
-}
-
-func TestRunAuthClearsPendingStateWhenCodeInputTimesOut(t *testing.T) {
-	configureTestHome(t)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v1/magic-link" {
-			http.NotFound(writer, request)
-			return
-		}
-		writer.WriteHeader(http.StatusAccepted)
-	}))
-	defer server.Close()
-
-	stdin, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
-	}
-	defer stdin.Close()
-	defer writer.Close()
-
-	var stdout, stderr bytes.Buffer
-	cfg := config.Load()
-	cfg.SentinelURL = server.URL + "/api/v1"
-	cfg.AuthCallbackTimeout = 10 * time.Millisecond
-	cfg.AuthCodeInputTimeout = 20 * time.Millisecond
-	exitCode := runWithConfig(
-		[]string{"auth", "--email", "alice@example.com"},
-		stdin,
+		[]string{"auth"},
+		nil,
 		&stdout,
 		&stderr,
 		cfg,
@@ -271,8 +214,14 @@ func TestRunAuthClearsPendingStateWhenCodeInputTimesOut(t *testing.T) {
 	if exitCode != 1 {
 		t.Fatalf("run() exit code = %d, want 1", exitCode)
 	}
-	if got, want := stderr.String(), "mystvpn auth: authorization code input timed out\n"; got != want {
+	if !strings.Contains(stdout.String(), "Open this URL in your browser to authenticate:\n") || !strings.Contains(stdout.String(), "client_id=cli") || !strings.Contains(stdout.String(), "Waiting for authentication approval...\n") {
+		t.Errorf("stdout = %q, want browser activation instructions", stdout.String())
+	}
+	if got, want := stderr.String(), "mystvpn auth: authentication timed out\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	if pollCalls.Load() < 2 {
+		t.Errorf("poll calls = %d, want at least 2", pollCalls.Load())
 	}
 	store := defaultTestStore(t)
 	if _, err := store.LoadPendingAuth(); !errors.Is(err, auth.ErrPendingAuthNotFound) {
@@ -280,16 +229,55 @@ func TestRunAuthClearsPendingStateWhenCodeInputTimesOut(t *testing.T) {
 	}
 }
 
-func TestRunAuthRequiresEmail(t *testing.T) {
+func TestRunAuthReportsInvalidActivationAndClearsPendingState(t *testing.T) {
+	configureTestHome(t)
+	var activationID string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/auth/activation":
+			var body map[string]string
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			activationID = body["id"]
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/auth/activation/"+activationID:
+			_, _ = writer.Write([]byte(`{"id":"` + activationID + `","valid":false,"token":null}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	cfg := config.Load()
+	cfg.APIURL = server.URL + "/api/v1"
+	cfg.AuthPollInterval = time.Millisecond
+	cfg.AuthTimeout = time.Second
+	exitCode := runWithConfig([]string{"auth"}, nil, &stdout, &stderr, cfg)
+
+	if exitCode != 1 {
+		t.Fatalf("run() exit code = %d, want 1", exitCode)
+	}
+	if got, want := stderr.String(), "mystvpn auth: activation expired or was rejected\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	if !strings.Contains(stdout.String(), "client_id=cli") {
+		t.Errorf("stdout = %q, want cli authorization URL", stdout.String())
+	}
+	store := defaultTestStore(t)
+	if _, err := store.LoadPendingAuth(); !errors.Is(err, auth.ErrPendingAuthNotFound) {
+		t.Errorf("LoadPendingAuth() error = %v, want cleared pending state", err)
+	}
+}
+
+func TestRunAuthRejectsEmailFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	exitCode := run([]string{"auth"}, nil, &stdout, &stderr)
+	exitCode := run([]string{"auth", "--email", "alice@example.com"}, nil, &stdout, &stderr)
 
 	if exitCode != 2 {
 		t.Fatalf("run() exit code = %d, want 2", exitCode)
 	}
-	if !strings.Contains(stderr.String(), "--email is required") {
-		t.Errorf("stderr = %q, want required-email error", stderr.String())
+	if !strings.Contains(stderr.String(), `unexpected argument "--email"`) {
+		t.Errorf("stderr = %q, want rejected email flag", stderr.String())
 	}
 }
 
@@ -304,9 +292,9 @@ func TestRunAuthReportsOnlyHTTPStatus(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
-	cfg.SentinelURL = server.URL + "/api/v1"
+	cfg.APIURL = server.URL + "/api/v1"
 	exitCode := runWithConfig(
-		[]string{"auth", "--email", "alice@example.com"},
+		[]string{"auth"},
 		nil,
 		&stdout,
 		&stderr,
@@ -319,106 +307,6 @@ func TestRunAuthReportsOnlyHTTPStatus(t *testing.T) {
 	if got, want := stderr.String(), "mystvpn auth: HTTP status 401\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
-}
-
-func TestRunAuthReportsTokenExchangeFailure(t *testing.T) {
-	configureTestHome(t)
-
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/v1/magic-link":
-			var body map[string]string
-			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-				t.Fatalf("decode magic-link request: %v", err)
-			}
-			writer.WriteHeader(http.StatusAccepted)
-			go sendTestAuthCallback(body["continue_to"])
-		case "/api/v1/oauth/token":
-			writer.WriteHeader(http.StatusUnauthorized)
-			_, _ = writer.Write([]byte(`{"message":"do not print this detail"}`))
-		default:
-			http.NotFound(writer, request)
-		}
-	}))
-	defer server.Close()
-
-	var stdout, stderr bytes.Buffer
-	cfg := config.Load()
-	cfg.SentinelURL = server.URL + "/api/v1"
-	cfg.AuthCallbackTimeout = 2 * time.Second
-	exitCode := runWithConfig(
-		[]string{"auth", "--email", "alice@example.com"},
-		nil,
-		&stdout,
-		&stderr,
-		cfg,
-	)
-
-	if exitCode != 1 {
-		t.Fatalf("run() exit code = %d, want 1", exitCode)
-	}
-	if got, want := stdout.String(), "Authentication link sent. Check your email.\n"; got != want {
-		t.Errorf("stdout = %q, want %q", got, want)
-	}
-	if got, want := stderr.String(), "mystvpn auth: HTTP status 401\n"; got != want {
-		t.Errorf("stderr = %q, want %q", got, want)
-	}
-	store := defaultTestStore(t)
-	if _, err := store.LoadAccessToken(); !errors.Is(err, auth.ErrTokenNotFound) {
-		t.Errorf("LoadAccessToken() error = %v, want no saved token", err)
-	}
-	if _, err := store.LoadPendingAuth(); !errors.Is(err, auth.ErrPendingAuthNotFound) {
-		t.Errorf("LoadPendingAuth() error = %v, want cleared pending state", err)
-	}
-}
-
-func TestRunAuthRejectsNonAuthFlags(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-
-	exitCode := run([]string{"auth", "--email", "alice@example.com", "--pool", "other"}, nil, &stdout, &stderr)
-
-	if exitCode != 2 {
-		t.Fatalf("run() exit code = %d, want 2", exitCode)
-	}
-	if !strings.Contains(stderr.String(), "flag provided but not defined: -pool") {
-		t.Errorf("stderr = %q, want unknown auth flag error", stderr.String())
-	}
-}
-
-func TestRunAuthRejectsHelpFlags(t *testing.T) {
-	for _, option := range []string{"--help", "-h"} {
-		t.Run(option, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-
-			exitCode := run([]string{"auth", option}, nil, &stdout, &stderr)
-
-			if exitCode != 2 {
-				t.Fatalf("run() exit code = %d, want 2", exitCode)
-			}
-			if !strings.Contains(stderr.String(), "help flags are not supported") {
-				t.Errorf("stderr = %q, want unsupported-help error", stderr.String())
-			}
-		})
-	}
-}
-
-func authCodeInput(t *testing.T, code string) *os.File {
-	t.Helper()
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
-	}
-	if _, err := writer.WriteString(code + "\n"); err != nil {
-		reader.Close()
-		writer.Close()
-		t.Fatalf("write authorization code input: %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		reader.Close()
-		t.Fatalf("close authorization code input: %v", err)
-	}
-	t.Cleanup(func() { _ = reader.Close() })
-	return reader
 }
 
 func TestRunCountries(t *testing.T) {
@@ -571,36 +459,34 @@ func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 	}
 
 	var refreshCalls atomic.Int32
-	authServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		refreshCalls.Add(1)
-		if request.URL.Path != "/api/v1/oauth/token" {
-			t.Errorf("refresh path = %q", request.URL.Path)
-		}
-		var body map[string]string
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatalf("decode refresh request: %v", err)
-		}
-		if body["grant_type"] != "refresh_token" || body["refresh_token"] != "old-refresh" || body["client_id"] != "dvpn" {
-			t.Errorf("refresh request = %v, want refresh-token grant", body)
-		}
-		_, _ = writer.Write([]byte(`{"access_token":"new-auth","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`))
-	}))
-	defer authServer.Close()
-
 	var apiCalls atomic.Int32
 	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		apiCalls.Add(1)
-		if request.Header.Get("Authorization") != "Bearer new-auth" {
-			writer.WriteHeader(http.StatusUnauthorized)
-			return
+		switch request.URL.Path {
+		case "/api/v1/oauth/token":
+			refreshCalls.Add(1)
+			var body testTokenRequest
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode refresh request: %v", err)
+			}
+			if body.GrantType != "refresh_token" || body.RefreshToken != "old-refresh" || body.ClientID != "cli" {
+				t.Errorf("refresh request = %v, want refresh-token grant", body)
+			}
+			_, _ = writer.Write([]byte(`{"access_token":"new-auth","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`))
+		case "/api/v1/connection/config":
+			apiCalls.Add(1)
+			if request.Header.Get("Authorization") != "Bearer new-auth" {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = writer.Write([]byte(`{"countries":["CA"],"top_countries":["CA"]}`))
+		default:
+			http.NotFound(writer, request)
 		}
-		_, _ = writer.Write([]byte(`{"countries":["CA"],"top_countries":["CA"]}`))
 	}))
 	defer apiServer.Close()
 
 	cfg := config.Load()
-	cfg.APIURL = apiServer.URL
-	cfg.SentinelURL = authServer.URL + "/api/v1"
+	cfg.APIURL = apiServer.URL + "/api/v1"
 	var stdout, stderr bytes.Buffer
 	exitCode := runWithConfig(
 		[]string{"countries", "--ip-type", "residential"},
@@ -685,20 +571,6 @@ func TestRunLogoutClearsTokens(t *testing.T) {
 	}
 	if _, err := store.LoadRefreshToken(); !errors.Is(err, auth.ErrTokenNotFound) {
 		t.Errorf("LoadRefreshToken() error = %v, want ErrTokenNotFound", err)
-	}
-}
-
-func sendTestAuthCallback(continueTo string) {
-	callbackURL, err := url.Parse(continueTo)
-	if err != nil {
-		return
-	}
-	query := callbackURL.Query()
-	query.Set("code", "test-authorization-code")
-	callbackURL.RawQuery = query.Encode()
-	response, err := http.Get(callbackURL.String())
-	if err == nil {
-		response.Body.Close()
 	}
 }
 

@@ -21,24 +21,17 @@ const (
 var (
 	// ErrTokenNotFound indicates that a requested token is not stored.
 	ErrTokenNotFound = errors.New("token not found")
-	// ErrPendingAuthNotFound indicates that no magic-link attempt is pending.
+	// ErrPendingAuthNotFound indicates that no browser activation is pending.
 	ErrPendingAuthNotFound = errors.New("pending authentication not found")
 )
 
-// PendingAuth contains the protected local state required to complete a
-// magic-link PKCE exchange.
+// PendingAuth contains the protected local state for browser activation.
 type PendingAuth struct {
-	Email             string    `json:"email"`
-	State             string    `json:"state"`
-	Nonce             string    `json:"nonce"`
-	CodeVerifier      string    `json:"code_verifier"`
-	CodeChallenge     string    `json:"code_challenge"`
-	CallbackURL       string    `json:"callback_url"`
-	AuthorizationCode string    `json:"authorization_code,omitempty"`
-	ExpiresAt         time.Time `json:"expires_at"`
+	ActivationID string    `json:"activation_id"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
-// CredentialStore persists tokens and pending magic-link authentication state.
+// CredentialStore persists tokens and pending activation state.
 type CredentialStore interface {
 	SaveAccessToken(token string) error
 	SaveRefreshToken(token string) error
@@ -96,7 +89,7 @@ func (s *FileStore) ClearTokens() error {
 	return s.removeFiles(accessTokenFile, refreshTokenFile, legacyAuthTokenFile)
 }
 
-// SavePendingAuth securely stores an in-progress magic-link authentication.
+// SavePendingAuth securely stores an in-progress browser activation.
 func (s *FileStore) SavePendingAuth(pending PendingAuth) error {
 	if err := validatePendingAuth(pending); err != nil {
 		return err
@@ -108,7 +101,7 @@ func (s *FileStore) SavePendingAuth(pending PendingAuth) error {
 	return s.saveFile(pendingAuthFile, data)
 }
 
-// LoadPendingAuth loads an in-progress magic-link authentication.
+// LoadPendingAuth loads an in-progress browser activation.
 func (s *FileStore) LoadPendingAuth() (PendingAuth, error) {
 	data, err := s.loadFile(pendingAuthFile, ErrPendingAuthNotFound)
 	if err != nil {
@@ -124,7 +117,7 @@ func (s *FileStore) LoadPendingAuth() (PendingAuth, error) {
 	return pending, nil
 }
 
-// ClearPendingAuth removes an in-progress magic-link authentication.
+// ClearPendingAuth removes an in-progress browser activation.
 func (s *FileStore) ClearPendingAuth() error {
 	return s.removeFiles(pendingAuthFile)
 }
@@ -224,11 +217,7 @@ func (s *FileStore) removeFiles(names ...string) error {
 }
 
 func validatePendingAuth(pending PendingAuth) error {
-	if strings.TrimSpace(pending.Email) == "" ||
-		strings.TrimSpace(pending.State) == "" ||
-		strings.TrimSpace(pending.Nonce) == "" ||
-		strings.TrimSpace(pending.CodeVerifier) == "" ||
-		strings.TrimSpace(pending.CodeChallenge) == "" ||
+	if strings.TrimSpace(pending.ActivationID) == "" ||
 		pending.ExpiresAt.IsZero() {
 		return errors.New("pending authentication is incomplete")
 	}

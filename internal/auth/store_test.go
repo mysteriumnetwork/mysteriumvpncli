@@ -68,14 +68,8 @@ func TestFileStorePendingAuthLifecycle(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "credentials")
 	store := NewFileStore(directory)
 	pending := PendingAuth{
-		Email:             "alice@example.com",
-		State:             "state-value",
-		Nonce:             "nonce-value",
-		CodeVerifier:      "verifier-value",
-		CodeChallenge:     "challenge-value",
-		CallbackURL:       "http://127.0.0.1:53682/auth/callback",
-		AuthorizationCode: "authorization-code",
-		ExpiresAt:         time.Date(2026, time.September, 25, 10, 10, 0, 0, time.UTC),
+		ActivationID: "223e4567-e89b-42d3-a456-426614174000",
+		ExpiresAt:    time.Date(2026, time.September, 25, 10, 10, 0, 0, time.UTC),
 	}
 
 	if err := store.SavePendingAuth(pending); err != nil {
@@ -99,29 +93,12 @@ func TestFileStorePendingAuthLifecycle(t *testing.T) {
 	}
 }
 
-func TestFileStoreAllowsPendingPasteCodeFlowWithoutCallback(t *testing.T) {
+func TestFileStoreRejectsIncompletePendingActivation(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "credentials")
 	store := NewFileStore(directory)
-	pending := PendingAuth{
-		Email:         "alice@example.com",
-		State:         "state-value",
-		Nonce:         "nonce-value",
-		CodeVerifier:  "verifier-value",
-		CodeChallenge: "challenge-value",
-		ExpiresAt:     time.Date(2026, time.September, 25, 10, 10, 0, 0, time.UTC),
+	if err := store.SavePendingAuth(PendingAuth{ExpiresAt: time.Now().Add(time.Minute)}); err == nil {
+		t.Fatal("SavePendingAuth() error = nil, want incomplete activation error")
 	}
-
-	if err := store.SavePendingAuth(pending); err != nil {
-		t.Fatalf("SavePendingAuth() error = %v", err)
-	}
-	loaded, err := store.LoadPendingAuth()
-	if err != nil {
-		t.Fatalf("LoadPendingAuth() error = %v", err)
-	}
-	if loaded != pending {
-		t.Errorf("loaded pending auth = %+v, want %+v", loaded, pending)
-	}
-	assertPermissions(t, filepath.Join(directory, pendingAuthFile), 0o600)
 }
 
 func assertPermissions(t *testing.T, path string, want os.FileMode) {

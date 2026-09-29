@@ -1,16 +1,13 @@
-// Package auth provides magic-link authentication and token lifecycle handling.
+// Package auth provides browser activation authentication and token lifecycle handling.
 package auth
 
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/mail"
 	"net/url"
 	"strings"
 	"time"
@@ -19,16 +16,17 @@ import (
 )
 
 const (
-	startAuthEndpoint   = "/magic-link"
-	tokenEndpoint       = "/oauth/token"
-	codeChallengeMethod = "S256"
-	authorizationGrant  = "authorization_code"
-	refreshTokenGrant   = "refresh_token"
+	activationEndpoint = "/auth/activation"
+	tokenEndpoint      = "/oauth/token"
+	refreshTokenGrant  = "refresh_token"
 )
 
-// ErrPendingAuthExpired indicates that an authorization code belongs to an
-// expired local authentication attempt.
-var ErrPendingAuthExpired = errors.New("pending authentication has expired")
+var (
+	// ErrAuthenticationTimedOut indicates that activation did not complete in time.
+	ErrAuthenticationTimedOut = errors.New("authentication timed out")
+	// ErrActivationInvalid indicates that the backend rejected or expired an activation.
+	ErrActivationInvalid = errors.New("activation expired or was rejected")
+)
 
 // HTTPStatusError reports an unsuccessful authentication response without
 // exposing its response body.
@@ -40,21 +38,21 @@ func (e *HTTPStatusError) Error() string {
 	return fmt.Sprintf("HTTP status %d", e.StatusCode)
 }
 
-// Options configures the magic-link authentication contract.
+// Options configures browser activation and token refresh.
 type Options struct {
-	ClientID       string
-	Device         string
-	PendingAuthTTL time.Duration
+	ClientID         string
+	AuthorizationURL string
+	PollInterval     time.Duration
+	AuthTimeout      time.Duration
 }
 
-// StartResult contains the public result of starting magic-link authentication.
+// StartResult contains the protected activation state and browser URL.
 type StartResult struct {
-	Pending PendingAuth
-	AuthURL string
+	Pending          PendingAuth
+	AuthorizationURL string
 }
 
-// Service handles magic-link initiation, token exchange, token refresh, and
-// API-client integration.
+// Service handles activation, token persistence, token refresh, and API-client integration.
 type Service struct {
 	client  *client.Client
 	store   CredentialStore
@@ -62,123 +60,45 @@ type Service struct {
 	now     func() time.Time
 }
 
-// NewService creates a magic-link authentication service.
+// NewService creates an authentication service.
 func NewService(authClient *client.Client, store CredentialStore, options Options) *Service {
-	return &Service{
-		client:  authClient,
-		store:   store,
-		options: options,
-		now:     time.Now,
-	}
+	return &Service{client: authClient, store: store, options: options, now: time.Now}
 }
 
-// Start begins email authentication and securely stores the PKCE state needed
-// to complete it in a later invocation.
-func (s *Service) Start(ctx context.Context, email, callbackURL string) (StartResult, error) {
-	email = strings.TrimSpace(email)
-	if err := validateEmail(email); err != nil {
-		return StartResult{}, err
-	}
+// Start creates and stores a new browser activation.
+func (s *Service) Start(ctx context.Context) (StartResult, error) {
 	if strings.TrimSpace(s.options.ClientID) == "" {
 		return StartResult{}, errors.New("authentication client ID must not be empty")
 	}
-	if s.options.PendingAuthTTL <= 0 {
-		return StartResult{}, errors.New("pending authentication TTL must be positive")
+	if s.options.AuthTimeout <= 0 {
+		return StartResult{}, errors.New("authentication timeout must be positive")
 	}
 
-	verifier, challenge, err := GeneratePKCE()
+	activationID, err := generateUUID()
 	if err != nil {
-		return StartResult{}, fmt.Errorf("generate PKCE challenge: %w", err)
+		return StartResult{}, fmt.Errorf("generate activation ID: %w", err)
 	}
-	state, err := randomURLSafe(32)
+	authorizationURL, err := buildAuthorizationURL(s.options.AuthorizationURL, s.options.ClientID, activationID)
 	if err != nil {
-		return StartResult{}, fmt.Errorf("generate authentication state: %w", err)
-	}
-	nonce, err := randomURLSafe(32)
-	if err != nil {
-		return StartResult{}, fmt.Errorf("generate authentication nonce: %w", err)
-	}
-	continueTo := ""
-	if strings.TrimSpace(callbackURL) != "" {
-		continueTo, err = callbackURLWithSecurityValues(callbackURL, state, nonce)
-		if err != nil {
-			return StartResult{}, err
-		}
+		return StartResult{}, err
 	}
 
-	pending := PendingAuth{
-		Email:         email,
-		State:         state,
-		Nonce:         nonce,
-		CodeVerifier:  verifier,
-		CodeChallenge: challenge,
-		CallbackURL:   continueTo,
-		ExpiresAt:     s.now().UTC().Add(s.options.PendingAuthTTL),
-	}
+	pending := PendingAuth{ActivationID: activationID, ExpiresAt: s.now().UTC().Add(s.options.AuthTimeout)}
 	if err := s.store.SavePendingAuth(pending); err != nil {
 		return StartResult{}, fmt.Errorf("save pending authentication: %w", err)
 	}
 
-	request := startAuthRequest{
-		Email:               pending.Email,
-		ClientID:            s.options.ClientID,
-		CodeChallenge:       pending.CodeChallenge,
-		CodeChallengeMethod: codeChallengeMethod,
-		ContinueTo:          pending.CallbackURL,
-	}
-	var response startAuthResponse
-	statusCode, err := s.client.PostWithStatus(ctx, startAuthEndpoint, request, &response)
-	if err := authError(statusCode, err); err != nil {
+	statusCode, requestErr := s.client.PostWithStatusDebug(ctx, activationEndpoint, activationRequest{ID: activationID}, nil)
+	if requestErr != nil {
 		_ = s.store.ClearPendingAuth()
-		return StartResult{}, err
+		return StartResult{}, authError(statusCode, requestErr)
 	}
-	return StartResult{Pending: pending, AuthURL: response.URL()}, nil
-}
-
-// CompleteCallback validates a loopback callback and stores its authorization
-// code until it can be exchanged for tokens.
-func (s *Service) CompleteCallback(callback CallbackResult) error {
-	pending, err := s.store.LoadPendingAuth()
-	if err != nil {
-		return fmt.Errorf("load pending authentication: %w", err)
-	}
-	if !s.now().Before(pending.ExpiresAt) {
+	if statusCode != http.StatusOK && statusCode != http.StatusNoContent {
 		_ = s.store.ClearPendingAuth()
-		return ErrPendingAuthExpired
+		return StartResult{}, &HTTPStatusError{StatusCode: statusCode}
 	}
-	if subtle.ConstantTimeCompare([]byte(callback.State), []byte(pending.State)) != 1 ||
-		subtle.ConstantTimeCompare([]byte(callback.Nonce), []byte(pending.Nonce)) != 1 {
-		return errors.New("authentication callback state does not match")
-	}
-	if strings.TrimSpace(callback.AuthorizationCode) == "" {
-		return errors.New("authentication callback did not contain an authorization code")
-	}
-	return s.saveAuthorizationCode(pending, callback.AuthorizationCode)
-}
 
-// CompleteCode stores an authorization code entered by the user for the same
-// pending PKCE exchange used by the loopback callback flow.
-func (s *Service) CompleteCode(authorizationCode string) error {
-	pending, err := s.store.LoadPendingAuth()
-	if err != nil {
-		return fmt.Errorf("load pending authentication: %w", err)
-	}
-	if !s.now().Before(pending.ExpiresAt) {
-		_ = s.store.ClearPendingAuth()
-		return ErrPendingAuthExpired
-	}
-	if strings.TrimSpace(authorizationCode) == "" {
-		return errors.New("authorization code must not be empty")
-	}
-	return s.saveAuthorizationCode(pending, authorizationCode)
-}
-
-func (s *Service) saveAuthorizationCode(pending PendingAuth, authorizationCode string) error {
-	pending.AuthorizationCode = strings.TrimSpace(authorizationCode)
-	if err := s.store.SavePendingAuth(pending); err != nil {
-		return fmt.Errorf("save completed authentication: %w", err)
-	}
-	return nil
+	return StartResult{Pending: pending, AuthorizationURL: authorizationURL}, nil
 }
 
 // Cancel clears an incomplete local authentication attempt.
@@ -189,11 +109,10 @@ func (s *Service) Cancel() error {
 	return nil
 }
 
-// Exchange exchanges the completed pending authorization for an access and
-// refresh token.
-func (s *Service) Exchange(ctx context.Context) error {
-	if strings.TrimSpace(s.options.ClientID) == "" {
-		return errors.New("authentication client ID must not be empty")
+// Poll waits for the browser activation to produce an access and refresh token pair.
+func (s *Service) Poll(ctx context.Context) error {
+	if s.options.PollInterval <= 0 {
+		return errors.New("authentication poll interval must be positive")
 	}
 	pending, err := s.store.LoadPendingAuth()
 	if err != nil {
@@ -201,34 +120,54 @@ func (s *Service) Exchange(ctx context.Context) error {
 	}
 	if !s.now().Before(pending.ExpiresAt) {
 		_ = s.store.ClearPendingAuth()
-		return ErrPendingAuthExpired
-	}
-	if strings.TrimSpace(pending.AuthorizationCode) == "" {
-		return errors.New("pending authentication does not contain an authorization code")
+		return ErrAuthenticationTimedOut
 	}
 
-	request := tokenRequest{
-		GrantType:    authorizationGrant,
-		Code:         pending.AuthorizationCode,
-		ClientID:     s.options.ClientID,
-		CodeVerifier: pending.CodeVerifier,
-		Device:       s.options.Device,
+	pollContext, cancel := context.WithDeadline(ctx, pending.ExpiresAt)
+	defer cancel()
+	endpoint := activationEndpoint + "/" + url.PathEscape(pending.ActivationID)
+
+	for {
+		var response activationResponse
+		if err := s.client.Get(pollContext, endpoint, &response); err != nil {
+			_ = s.store.ClearPendingAuth()
+			if pollContext.Err() != nil {
+				return ErrAuthenticationTimedOut
+			}
+			return authError(0, err)
+		}
+		if response.ID != pending.ActivationID {
+			_ = s.store.ClearPendingAuth()
+			return errors.New("authentication response contained an unexpected activation ID")
+		}
+		if !response.Valid {
+			_ = s.store.ClearPendingAuth()
+			return ErrActivationInvalid
+		}
+		if response.Token != nil && tokenPairComplete(*response.Token) {
+			if err := validateTokenResponse(*response.Token); err != nil {
+				_ = s.store.ClearPendingAuth()
+				return err
+			}
+			if err := s.saveTokens(*response.Token); err != nil {
+				_ = s.store.ClearPendingAuth()
+				return err
+			}
+			if err := s.store.ClearPendingAuth(); err != nil {
+				return fmt.Errorf("clear pending authentication: %w", err)
+			}
+			return nil
+		}
+
+		timer := time.NewTimer(s.options.PollInterval)
+		select {
+		case <-pollContext.Done():
+			timer.Stop()
+			_ = s.store.ClearPendingAuth()
+			return ErrAuthenticationTimedOut
+		case <-timer.C:
+		}
 	}
-	var tokens TokenResponse
-	statusCode, err := s.client.PostWithStatus(ctx, tokenEndpoint, request, &tokens)
-	if err := authError(statusCode, err); err != nil {
-		return err
-	}
-	if err := validateTokenResponse(tokens); err != nil {
-		return err
-	}
-	if err := s.saveTokens(tokens); err != nil {
-		return err
-	}
-	if err := s.store.ClearPendingAuth(); err != nil {
-		return fmt.Errorf("clear pending authentication: %w", err)
-	}
-	return nil
 }
 
 // Refresh exchanges the stored refresh token for a new token pair and returns
@@ -242,11 +181,7 @@ func (s *Service) Refresh(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("load refresh token: %w", err)
 	}
 
-	request := tokenRequest{
-		GrantType:    refreshTokenGrant,
-		RefreshToken: refreshToken,
-		ClientID:     s.options.ClientID,
-	}
+	request := tokenRequest{GrantType: refreshTokenGrant, ClientID: s.options.ClientID, RefreshToken: refreshToken}
 	var tokens TokenResponse
 	statusCode, err := s.client.PostWithStatus(ctx, tokenEndpoint, request, &tokens)
 	if err := authError(statusCode, err); err != nil {
@@ -268,46 +203,39 @@ func (s *Service) ConfigureClient(apiClient *client.Client) error {
 	if err != nil {
 		return fmt.Errorf("load access token: %w", err)
 	}
-
 	apiClient.SetAccessToken(accessToken)
 	apiClient.SetUnauthorizedHandler(s.Refresh)
 	return nil
 }
 
-// GeneratePKCE returns an RFC 7636 verifier and its S256 challenge.
-func GeneratePKCE() (verifier, challenge string, err error) {
-	verifier, err = randomURLSafe(32)
-	if err != nil {
-		return "", "", err
-	}
-	digest := sha256.Sum256([]byte(verifier))
-	return verifier, base64.RawURLEncoding.EncodeToString(digest[:]), nil
-}
-
-func randomURLSafe(size int) (string, error) {
-	value := make([]byte, size)
+func generateUUID() (string, error) {
+	value := make([]byte, 16)
 	if _, err := rand.Read(value); err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(value), nil
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	encoded := hex.EncodeToString(value)
+	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
 }
 
-func validateEmail(email string) error {
-	address, err := mail.ParseAddress(email)
-	if err != nil || address.Address != email {
-		return errors.New("email must be a valid email address")
+func isUUID(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
 	}
-	return nil
+	_, err := hex.DecodeString(strings.ReplaceAll(value, "-", ""))
+	return err == nil
 }
 
-func callbackURLWithSecurityValues(callbackURL, state, nonce string) (string, error) {
-	parsed, err := url.Parse(callbackURL)
-	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" {
-		return "", errors.New("authentication callback URL must use loopback HTTP")
+func buildAuthorizationURL(rawURL, clientID, activationID string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return "", errors.New("invalid authentication authorization URL")
 	}
 	query := parsed.Query()
-	query.Set("state", state)
-	query.Set("nonce", nonce)
+	query.Set("response_type", "activation_none")
+	query.Set("client_id", clientID)
+	query.Set("request_id", activationID)
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
 }
@@ -336,8 +264,12 @@ func authError(statusCode int, err error) error {
 	return err
 }
 
+func tokenPairComplete(tokens TokenResponse) bool {
+	return strings.TrimSpace(tokens.AccessToken) != "" && strings.TrimSpace(tokens.RefreshToken) != ""
+}
+
 func validateTokenResponse(tokens TokenResponse) error {
-	if strings.TrimSpace(tokens.AccessToken) == "" || strings.TrimSpace(tokens.RefreshToken) == "" {
+	if !tokenPairComplete(tokens) {
 		return errors.New("authentication response did not contain both tokens")
 	}
 	if !strings.EqualFold(strings.TrimSpace(tokens.TokenType), "Bearer") {
@@ -349,37 +281,23 @@ func validateTokenResponse(tokens TokenResponse) error {
 	return nil
 }
 
-type startAuthRequest struct {
-	Email               string `json:"email"`
-	ClientID            string `json:"client_id"`
-	CodeChallenge       string `json:"code_challenge"`
-	CodeChallengeMethod string `json:"code_challenge_method"`
-	ContinueTo          string `json:"continue_to,omitempty"`
+type activationRequest struct {
+	ID string `json:"id"`
 }
 
-type startAuthResponse struct {
-	AuthURL  string `json:"auth_url"`
-	URLValue string `json:"url"`
-}
-
-func (r startAuthResponse) URL() string {
-	if strings.TrimSpace(r.AuthURL) != "" {
-		return r.AuthURL
-	}
-	return r.URLValue
+type activationResponse struct {
+	ID    string         `json:"id"`
+	Valid bool           `json:"valid"`
+	Token *TokenResponse `json:"token"`
 }
 
 type tokenRequest struct {
 	GrantType    string `json:"grant_type"`
-	Code         string `json:"code,omitempty"`
 	ClientID     string `json:"client_id"`
-	CodeVerifier string `json:"code_verifier,omitempty"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	Device       string `json:"device,omitempty"`
+	RefreshToken string `json:"refresh_token"`
 }
 
-// TokenResponse is the OAuth token payload returned for authorization-code
-// and refresh-token grants.
+// TokenResponse is the token payload returned by activation and refresh.
 type TokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`

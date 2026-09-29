@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +27,6 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 
 	cfg := config.Load()
 	cfg.APIURL = server.APIURL()
-	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 	var allOutput strings.Builder
 
@@ -38,7 +38,7 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	}
 
 	assertCommandResult(t, execute("status"), 0, "connected: no\n", "")
-	assertCommandResult(t, execute("auth", "--email", "alice@example.com"), 0, "Authentication link sent. Check your email.\nAuthentication successful.\n", "")
+	assertAuthCommandSuccess(t, execute("auth"))
 
 	credentialsDirectory := filepath.Join(testConfigDirectory(t), "mystvpn", "credentials")
 	assertFileMode(t, filepath.Join(credentialsDirectory, "access_token"), 0o600)
@@ -103,8 +103,8 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	assertFileMode(t, credentialsDirectory, 0o700)
 
 	snapshot := server.Snapshot()
-	if snapshot.AuthCalls != 1 || snapshot.TokenExchangeCalls != 1 || snapshot.TokenRefreshCalls != 1 || len(snapshot.CountryQueries) != 1 {
-		t.Errorf("mock calls = %+v, want one auth, token exchange, token refresh, and countries call", snapshot)
+	if snapshot.AuthCalls != 1 || snapshot.ActivationPollCalls != 1 || snapshot.TokenRefreshCalls != 1 || len(snapshot.CountryQueries) != 1 {
+		t.Errorf("mock calls = %+v, want one activation creation, activation poll, token refresh, and countries call", snapshot)
 	}
 	if len(snapshot.ConnectRequests) != 2 {
 		t.Fatalf("connect requests = %d, want 2", len(snapshot.ConnectRequests))
@@ -141,10 +141,9 @@ func TestCLIConnectReplacesActiveSession(t *testing.T) {
 	defer server.Close()
 	cfg := config.Load()
 	cfg.APIURL = server.APIURL()
-	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication successful.\n", "")
+	assertAuthCommandSuccess(t, executeCLI([]string{"auth"}, cfg, runner))
 	assertCommandResult(
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "residential"}, cfg, runner),
@@ -193,10 +192,9 @@ func TestCLILogoutDisconnectsActiveSession(t *testing.T) {
 	defer server.Close()
 	cfg := config.Load()
 	cfg.APIURL = server.APIURL()
-	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication successful.\n", "")
+	assertAuthCommandSuccess(t, executeCLI([]string{"auth"}, cfg, runner))
 	assertCommandResult(
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "residential"}, cfg, runner),
@@ -233,8 +231,8 @@ func TestCLIAuthenticationFailureEndToEnd(t *testing.T) {
 	server.SetAuthStatus(401)
 
 	cfg := config.Load()
-	cfg.SentinelURL = server.SentinelURL()
-	result := executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, &endToEndTunnelRunner{})
+	cfg.APIURL = server.APIURL()
+	result := executeCLI([]string{"auth"}, cfg, &endToEndTunnelRunner{})
 
 	assertCommandResult(t, result, 1, "", "mystvpn auth: HTTP status 401\n")
 	store, err := auth.NewDefaultFileStore()
@@ -252,10 +250,9 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 	defer server.Close()
 	cfg := config.Load()
 	cfg.APIURL = server.APIURL()
-	cfg.SentinelURL = server.SentinelURL()
 	runner := &endToEndTunnelRunner{}
 
-	assertCommandResult(t, executeCLI([]string{"auth", "--email", "alice@example.com"}, cfg, runner), 0, "Authentication link sent. Check your email.\nAuthentication successful.\n", "")
+	assertAuthCommandSuccess(t, executeCLI([]string{"auth"}, cfg, runner))
 
 	server.SetConnectStatus(http.StatusForbidden)
 	assertCommandResult(
@@ -345,6 +342,24 @@ func assertCommandResult(t *testing.T, got commandResult, wantExit int, wantStdo
 			wantStdout,
 			wantStderr,
 		)
+	}
+}
+
+func assertAuthCommandSuccess(t *testing.T, got commandResult) {
+	t.Helper()
+	if got.exitCode != 0 || got.stderr != "" {
+		t.Fatalf("auth result = exit %d, stdout %q, stderr %q", got.exitCode, got.stdout, got.stderr)
+	}
+	lines := strings.Split(strings.TrimSuffix(got.stdout, "\n"), "\n")
+	if len(lines) != 4 || lines[0] != "Open this URL in your browser to authenticate:" || lines[2] != "Waiting for authentication approval..." || lines[3] != "Authentication successful." {
+		t.Fatalf("auth stdout = %q, want activation instructions and success", got.stdout)
+	}
+	parsed, err := url.Parse(lines[1])
+	if err != nil {
+		t.Fatalf("parse authorization URL: %v", err)
+	}
+	if parsed.Scheme != "https" || parsed.Host != "app.mysteriumvpn.com" || parsed.Path != "/oauth/authorize" || parsed.Query().Get("response_type") != "activation_none" || parsed.Query().Get("client_id") != "cli" || parsed.Query().Get("request_id") == "" {
+		t.Errorf("authorization URL = %q, want cli activation URL", lines[1])
 	}
 }
 

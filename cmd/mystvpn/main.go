@@ -2,16 +2,12 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
-	"os/exec"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -26,10 +22,7 @@ import (
 
 var version = "dev"
 
-const (
-	countriesPerRow = 10
-	maxAuthCodeSize = 8 << 10
-)
+const countriesPerRow = 10
 
 var commands = []string{
 	"auth",
@@ -67,7 +60,7 @@ func runWithDependencies(args []string, stdin *os.File, stdout, stderr io.Writer
 
 	switch args[0] {
 	case "auth":
-		return runAuth(args[1:], cfg, stdin, stdout, stderr)
+		return runAuth(args[1:], cfg, stdout, stderr)
 	case "countries":
 		return runCountries(args[1:], cfg, stdout, stderr)
 	case "connect":
@@ -526,40 +519,17 @@ func writeCountriesError(output io.Writer, err error) {
 	fmt.Fprintln(output, "mystvpn countries: request failed")
 }
 
-func runAuth(args []string, cfg config.Config, stdin io.Reader, stdout, stderr io.Writer) int {
-	flags := flag.NewFlagSet("auth", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	email := flags.String("email", "", "account email")
-	flags.Usage = func() {}
-
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprintln(stderr, `mystvpn auth: help flags are not supported; use "mystvpn help"`)
-		}
+func runAuth(args []string, cfg config.Config, stdout, stderr io.Writer) int {
+	if !acceptsNoArguments("auth", args, stderr) {
 		return 2
 	}
-	if flags.NArg() != 0 {
-		fmt.Fprintf(stderr, "mystvpn auth: unexpected argument %q\n", flags.Arg(0))
-		return 2
-	}
-	if strings.TrimSpace(*email) == "" {
-		fmt.Fprintln(stderr, "mystvpn auth: --email is required")
-		return 2
-	}
-	if cfg.AuthCallbackTimeout <= 0 {
-		fmt.Fprintln(stderr, "mystvpn auth: invalid callback timeout")
+	if cfg.AuthPollInterval <= 0 {
+		fmt.Fprintln(stderr, "mystvpn auth: invalid poll interval")
 		return 1
 	}
-	if cfg.AuthCodeInputTimeout <= 0 {
-		fmt.Fprintln(stderr, "mystvpn auth: invalid authorization code timeout")
+	if cfg.AuthTimeout <= 0 {
+		fmt.Fprintln(stderr, "mystvpn auth: invalid authentication timeout")
 		return 1
-	}
-
-	callback, callbackErr := auth.NewLoopbackCallback()
-	callbackURL := ""
-	if callbackErr == nil {
-		callbackURL = callback.URL()
-		defer callback.Close()
 	}
 
 	service, err := newAuthService(cfg)
@@ -567,75 +537,27 @@ func runAuth(args []string, cfg config.Config, stdin io.Reader, stdout, stderr i
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
-	result, err := service.Start(context.Background(), *email, callbackURL)
+	result, err := service.Start(context.Background())
 	if err != nil {
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
 
-	fmt.Fprintln(stdout, "Authentication link sent. Check your email.")
-	authURL := ""
-	authURLShown := false
-	if result.AuthURL != "" {
-		authURL, err = validateAuthenticationURL(result.AuthURL)
-		if err != nil {
-			_ = service.Cancel()
-			fmt.Fprintln(stderr, "mystvpn auth: invalid authentication URL")
-			return 1
-		}
-		if err := openBrowser(authURL); err != nil {
-			fmt.Fprintf(stdout, "Open this URL to continue: %s\n", authURL)
-			authURLShown = true
-		}
-	}
-
-	completed := false
-	if callback != nil {
-		callbackContext, cancel := context.WithTimeout(context.Background(), cfg.AuthCallbackTimeout)
-		callbackResult, callbackWaitErr := callback.Wait(callbackContext, result.Pending.State, result.Pending.Nonce)
-		cancel()
-		if callbackWaitErr == nil {
-			if err := service.CompleteCallback(callbackResult); err != nil {
-				_ = service.Cancel()
-				writeAuthenticationError(stderr, err)
-				return 1
-			}
-			completed = true
-		}
-	}
-
-	if !completed {
-		fmt.Fprintln(stdout, "Browser callback not received. Paste the authorization code to continue.")
-		if authURL != "" && !authURLShown {
-			fmt.Fprintf(stdout, "Open this URL to continue: %s\n", authURL)
-		} else if authURL == "" {
-			fmt.Fprintln(stdout, "Open the authentication link from your email in a browser.")
-		}
-		fmt.Fprintln(stdout, "Authorization code:")
-
-		codeContext, cancel := context.WithTimeout(context.Background(), cfg.AuthCodeInputTimeout)
-		authorizationCode, codeErr := readAuthorizationCode(codeContext, stdin)
-		cancel()
-		if codeErr != nil {
-			_ = service.Cancel()
-			if errors.Is(codeErr, context.DeadlineExceeded) {
-				fmt.Fprintln(stderr, "mystvpn auth: authorization code input timed out")
-			} else {
-				fmt.Fprintln(stderr, "mystvpn auth: authorization code was not provided")
-			}
-			return 1
-		}
-		if err := service.CompleteCode(authorizationCode); err != nil {
-			_ = service.Cancel()
-			writeAuthenticationError(stderr, err)
-			return 1
-		}
-	}
-
-	exchangeContext, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	fmt.Fprintln(stdout, "Open this URL in your browser to authenticate:")
+	fmt.Fprintln(stdout, result.AuthorizationURL)
+	fmt.Fprintln(stdout, "Waiting for authentication approval...")
+	pollContext, cancel := context.WithTimeout(context.Background(), cfg.AuthTimeout)
 	defer cancel()
-	if err := service.Exchange(exchangeContext); err != nil {
+	if err := service.Poll(pollContext); err != nil {
 		_ = service.Cancel()
+		if errors.Is(err, auth.ErrAuthenticationTimedOut) {
+			fmt.Fprintln(stderr, "mystvpn auth: authentication timed out")
+			return 1
+		}
+		if errors.Is(err, auth.ErrActivationInvalid) {
+			fmt.Fprintln(stderr, "mystvpn auth: activation expired or was rejected")
+			return 1
+		}
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
@@ -643,44 +565,6 @@ func runAuth(args []string, cfg config.Config, stdin io.Reader, stdout, stderr i
 	fmt.Fprintln(stdout, "Authentication successful.")
 	return 0
 }
-
-func readAuthorizationCode(ctx context.Context, input io.Reader) (string, error) {
-	if input == nil {
-		return "", errors.New("authorization code input is unavailable")
-	}
-
-	type readResult struct {
-		code string
-		err  error
-	}
-	result := make(chan readResult, 1)
-	go func() {
-		scanner := bufio.NewScanner(input)
-		scanner.Buffer(make([]byte, 1024), maxAuthCodeSize)
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				result <- readResult{err: err}
-				return
-			}
-			result <- readResult{err: errors.New("authorization code was not provided")}
-			return
-		}
-		code := strings.TrimSpace(scanner.Text())
-		if code == "" {
-			result <- readResult{err: errors.New("authorization code was not provided")}
-			return
-		}
-		result <- readResult{code: code}
-	}()
-
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case value := <-result:
-		return value.code, value.err
-	}
-}
-
 func writeAuthenticationError(output io.Writer, err error) {
 	var statusErr *auth.HTTPStatusError
 	if errors.As(err, &statusErr) {
@@ -733,34 +617,16 @@ func newAuthService(cfg config.Config) (*auth.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	sentinelClient, err := client.New(cfg.SentinelURL, cfg.Timeout, cfg.Debug)
+	authClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
 	if err != nil {
 		return nil, err
 	}
-	return auth.NewService(sentinelClient, store, auth.Options{
-		ClientID:       cfg.AuthClientID,
-		Device:         cfg.AuthDevice,
-		PendingAuthTTL: cfg.PendingAuthTTL,
+	return auth.NewService(authClient, store, auth.Options{
+		ClientID:         cfg.AuthClientID,
+		AuthorizationURL: cfg.AuthorizationURL,
+		PollInterval:     cfg.AuthPollInterval,
+		AuthTimeout:      cfg.AuthTimeout,
 	}), nil
-}
-
-func openBrowser(rawURL string) error {
-	command := "xdg-open"
-	if runtime.GOOS == "darwin" {
-		command = "open"
-	}
-	if err := exec.Command(command, rawURL).Start(); err != nil {
-		return fmt.Errorf("open browser: %w", err)
-	}
-	return nil
-}
-
-func validateAuthenticationURL(rawURL string) (string, error) {
-	parsed, err := url.Parse(rawURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return "", errors.New("invalid authentication URL")
-	}
-	return parsed.String(), nil
 }
 
 func isCommand(name string) bool {
@@ -781,7 +647,7 @@ func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "Commands:")
 	for _, command := range commands {
 		if command == "auth" {
-			fmt.Fprintln(output, "  auth --email <address>")
+			fmt.Fprintln(output, "  auth")
 			continue
 		}
 		if command == "countries" {

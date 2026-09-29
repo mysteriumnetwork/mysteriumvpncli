@@ -3,7 +3,7 @@
 `mystvpn` is a Linux command-line client for connecting to Mysterium VPN with
 WireGuard.
 
-The MVP supports email magic-link authentication, country discovery,
+The MVP supports browser activation authentication, country discovery,
 connection establishment, refresh, local status, disconnect, and logout.
 
 ## Requirements
@@ -31,7 +31,7 @@ This creates a `mystvpn` executable in the repository root.
 ./mystvpn help
 ./mystvpn version
 
-./mystvpn auth --email alice@example.com
+./mystvpn auth
 ./mystvpn countries --ip-type residential
 ./mystvpn connect --country DE --ip-type residential
 ./mystvpn status
@@ -45,18 +45,16 @@ Running `mystvpn` without a command also prints the command overview.
 ### Authentication
 
 ```sh
-./mystvpn auth --email alice@example.com
+./mystvpn auth
 ```
 
-The command requests a magic link, starts a temporary listener on a random
-IPv4 loopback port, and waits briefly for the browser redirect. It validates
-the callback state and nonce, exchanges the authorization code using the PKCE
-verifier, and securely stores the resulting access and refresh tokens. The
-access token is attached automatically to later API calls; an unauthorized
-response triggers one refresh-token exchange and retries the request once. If
-the browser cannot reach the loopback callback, the command prompts for the
-authorization code shown by the browser and completes the same PKCE exchange.
-Code input is bounded by a timeout and is never printed by the CLI.
+The command creates a short-lived activation and prints a browser URL. Open the
+URL, sign in if needed, and approve access. The CLI does not open the browser
+automatically; it polls the API until approval succeeds or the five-minute
+activation expires. It securely stores the resulting access and refresh
+tokens. The access token is attached automatically to later API calls; an
+unauthorized response triggers one refresh-token exchange and retries the
+request once.
 
 ### Countries
 
@@ -124,7 +122,7 @@ removing the locally stored authentication and refresh tokens.
 
 ## Security
 
-- Access and refresh tokens, along with pending magic-link PKCE state, are
+- Access and refresh tokens, along with pending browser activation state, are
   stored in owner-only files in the current user's configuration directory.
 - The app-owned WireGuard keypair, active session, and generated WireGuard
   configuration are stored with owner-only permissions.
