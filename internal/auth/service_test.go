@@ -272,10 +272,11 @@ func newTestService(t *testing.T, authURL string, store CredentialStore) *Servic
 		t.Fatalf("client.New() error = %v", err)
 	}
 	return NewService(authClient, store, Options{
-		ClientID:         "cli",
-		AuthorizationURL: "https://app.mysteriumvpn.com/oauth/authorize",
-		PollInterval:     time.Millisecond,
-		AuthTimeout:      5 * time.Minute,
+		ClientID:           "cli",
+		ActivationClientID: "cli",
+		AuthorizationURL:   "https://app.mysteriumvpn.com/oauth/authorize",
+		PollInterval:       time.Millisecond,
+		AuthTimeout:        5 * time.Minute,
 	})
 }
 

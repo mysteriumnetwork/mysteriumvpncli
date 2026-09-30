@@ -100,6 +100,73 @@ func TestRunRefresh(t *testing.T) {
 	}
 }
 
+func TestRunRefreshClassifiesTunnelTeardownFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		downError   error
+		wantExit    int
+		wantActions string
+	}{
+		{
+			name:        "already absent is recoverable",
+			downError:   wireguard.ErrTunnelAlreadyDown,
+			wantExit:    0,
+			wantActions: "down,up",
+		},
+		{
+			name:        "genuine failure remains fatal",
+			downError:   errors.New("wg-quick down failed: permission denied"),
+			wantExit:    1,
+			wantActions: "down",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configureTestHome(t)
+			saveTestAuthToken(t)
+			original := saveTestSession(t)
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				_, _ = writer.Write([]byte(`{
+					"id":"conn-refreshed",
+					"wg_config":"[Interface]\nPrivateKey=%private_key%\nAddress=10.20.0.2/24\n",
+					"exit_ip":"2.3.4.5",
+					"ip_type":"residential",
+					"country":"DE",
+					"city":"hamburg"
+				}`))
+			}))
+			defer server.Close()
+
+			runner := &recordingTunnelRunner{down: func(string) error { return test.downError }}
+			cfg := config.Load()
+			cfg.APIURL = server.URL + "/api/v1"
+			var stdout, stderr bytes.Buffer
+			exitCode := runRefresh(nil, cfg, &stdout, &stderr, runner)
+
+			if exitCode != test.wantExit {
+				t.Fatalf("runRefresh() exit code = %d, want %d; stderr = %q", exitCode, test.wantExit, stderr.String())
+			}
+			if got := strings.Join(runner.actions, ","); got != test.wantActions {
+				t.Errorf("tunnel actions = %q, want %q", got, test.wantActions)
+			}
+			if test.wantExit == 0 {
+				if stderr.Len() != 0 || !strings.Contains(stdout.String(), "exit_ip: 2.3.4.5") {
+					t.Errorf("stdout = %q, stderr = %q; want successful reconnect", stdout.String(), stderr.String())
+				}
+				updated := loadTestSession(t)
+				if updated.SessionID != "conn-refreshed" || updated.ConfigPath != original.ConfigPath {
+					t.Errorf("updated session = %+v", updated)
+				}
+				return
+			}
+			if !strings.Contains(stderr.String(), "permission denied") || !strings.Contains(stderr.String(), original.ConfigPath) {
+				t.Errorf("stderr = %q, want genuine error and config path", stderr.String())
+			}
+		})
+	}
+}
+
 func TestRunStatus(t *testing.T) {
 	t.Run("not connected", func(t *testing.T) {
 		configureTestHome(t)
@@ -135,18 +202,17 @@ func TestRunDisconnect(t *testing.T) {
 	session := saveTestSession(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/connection/disconnect" {
-			t.Errorf("request = %s %s, want disconnect endpoint", request.Method, request.URL.Path)
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/connection/disconnect" {
+			t.Errorf("request = %s %s, want GET disconnect endpoint", request.Method, request.URL.Path)
 		}
 		if got := request.Header.Get("Authorization"); got != "Bearer auth-value" {
 			t.Errorf("Authorization = %q, want stored token", got)
 		}
-		var body proxy.DisconnectRequest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatalf("decode request: %v", err)
+		if got := request.URL.Query().Get("public_key"); got != session.PublicKey {
+			t.Errorf("public_key = %q, want saved public key", got)
 		}
-		if body.PublicKey != session.PublicKey {
-			t.Errorf("public key = %q, want saved public key", body.PublicKey)
+		if request.ContentLength > 0 {
+			t.Errorf("Content-Length = %d, want no request body", request.ContentLength)
 		}
 		writer.WriteHeader(http.StatusNoContent)
 	}))
@@ -217,6 +283,35 @@ func TestDisconnectHTTPFailurePreservesLocalSession(t *testing.T) {
 	}
 	if len(runner.actions) != 0 {
 		t.Errorf("tunnel actions = %v, want none", runner.actions)
+	}
+	if _, err := os.Stat(session.ConfigPath); err != nil {
+		t.Errorf("config Stat() error = %v, want preserved", err)
+	}
+	_ = loadTestSession(t)
+}
+
+func TestDisconnectTunnelFailureIncludesConfigPath(t *testing.T) {
+	configureTestHome(t)
+	saveTestAuthToken(t)
+	session := saveTestSession(t)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	runner := &recordingTunnelRunner{down: func(string) error {
+		return errors.New("wg-quick down failed")
+	}}
+	cfg := config.Load()
+	cfg.APIURL = server.URL
+	var stdout, stderr bytes.Buffer
+	exitCode := runDisconnect(nil, cfg, &stdout, &stderr, runner)
+
+	if exitCode != 1 {
+		t.Fatalf("runDisconnect() exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "wg-quick down failed") || !strings.Contains(stderr.String(), `config_path="`+session.ConfigPath+`"`) {
+		t.Errorf("stderr = %q, want wg-quick error with config path", stderr.String())
 	}
 	if _, err := os.Stat(session.ConfigPath); err != nil {
 		t.Errorf("config Stat() error = %v, want preserved", err)

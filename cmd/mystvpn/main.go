@@ -240,8 +240,8 @@ func establishConnection(command string, cfg config.Config, stdout, stderr io.Wr
 		}
 	} else {
 		configPath = activeSession.ConfigPath
-		if err := tunnelRunner.Down(context.Background(), configPath); err != nil {
-			fmt.Fprintf(stderr, "mystvpn %s: %v\n", command, err)
+		if err := tunnelRunner.Down(context.Background(), configPath); err != nil && !errors.Is(err, wireguard.ErrTunnelAlreadyDown) {
+			writeTunnelCommandError(stderr, command, configPath, err)
 			return 1
 		}
 		if err := wireguard.UpdateConfig(configPath, response.WGConfig, keyPair.PrivateKey); err != nil {
@@ -275,7 +275,7 @@ func establishConnection(command string, cfg config.Config, stdout, stderr io.Wr
 	}
 	if err := tunnelRunner.Up(context.Background(), configPath); err != nil {
 		clearSessionFiles(sessionStore, configPath)
-		fmt.Fprintf(stderr, "mystvpn %s: %v\n", command, err)
+		writeTunnelCommandError(stderr, command, configPath, err)
 		return 1
 	}
 
@@ -380,7 +380,7 @@ func disconnectSession(command string, cfg config.Config, stderr io.Writer, tunn
 		return false
 	}
 	if err := tunnelRunner.Down(context.Background(), session.ConfigPath); err != nil {
-		fmt.Fprintf(stderr, "mystvpn %s: %v\n", command, err)
+		writeTunnelCommandError(stderr, command, session.ConfigPath, err)
 		return false
 	}
 
@@ -404,6 +404,10 @@ func acceptsNoArguments(command string, args []string, stderr io.Writer) bool {
 func clearSessionFiles(sessionStore *state.Store, configPath string) {
 	_ = sessionStore.Clear()
 	_ = wireguard.RemoveConfig(configPath)
+}
+
+func writeTunnelCommandError(output io.Writer, command, configPath string, err error) {
+	fmt.Fprintf(output, "mystvpn %s: %v (config_path=%q)\n", command, err, configPath)
 }
 
 func writeSessionRequestError(output io.Writer, command string, err error) {
@@ -622,10 +626,11 @@ func newAuthService(cfg config.Config) (*auth.Service, error) {
 		return nil, err
 	}
 	return auth.NewService(authClient, store, auth.Options{
-		ClientID:         cfg.AuthClientID,
-		AuthorizationURL: cfg.AuthorizationURL,
-		PollInterval:     cfg.AuthPollInterval,
-		AuthTimeout:      cfg.AuthTimeout,
+		ClientID:           cfg.AuthClientID,
+		ActivationClientID: cfg.ActivationClientID,
+		AuthorizationURL:   cfg.AuthorizationURL,
+		PollInterval:       cfg.AuthPollInterval,
+		AuthTimeout:        cfg.AuthTimeout,
 	}), nil
 }
 

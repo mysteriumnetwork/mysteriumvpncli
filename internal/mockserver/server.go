@@ -263,7 +263,7 @@ func (s *Server) handleConnect(writer http.ResponseWriter, request *http.Request
 }
 
 func (s *Server) handleDisconnect(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
+	if request.Method != http.MethodGet {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
@@ -271,13 +271,13 @@ func (s *Server) handleDisconnect(writer http.ResponseWriter, request *http.Requ
 		writer.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-	var body proxy.DisconnectRequest
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.PublicKey == "" {
+	publicKey := request.URL.Query().Get("public_key")
+	if publicKey == "" {
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	s.mu.Lock()
-	s.disconnectRequests = append(s.disconnectRequests, body)
+	s.disconnectRequests = append(s.disconnectRequests, proxy.DisconnectRequest{PublicKey: publicKey})
 	statusCode := s.disconnectStatus
 	s.mu.Unlock()
 	if statusCode != 0 && statusCode != http.StatusNoContent {

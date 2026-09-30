@@ -15,6 +15,9 @@ func TestLoadDefaults(t *testing.T) {
 	if DefaultAuthClientID != "cli" {
 		t.Errorf("DefaultAuthClientID = %q", DefaultAuthClientID)
 	}
+	if DefaultActivationClientID != "cli" {
+		t.Errorf("DefaultActivationClientID = %q", DefaultActivationClientID)
+	}
 	if DefaultAuthorizationURL != "https://app.mysteriumvpn.com/oauth/authorize" {
 		t.Errorf("DefaultAuthorizationURL = %q", DefaultAuthorizationURL)
 	}
@@ -29,6 +32,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.AuthClientID != DefaultAuthClientID {
 		t.Errorf("AuthClientID = %q, want %q", cfg.AuthClientID, DefaultAuthClientID)
+	}
+	if cfg.ActivationClientID != DefaultActivationClientID {
+		t.Errorf("ActivationClientID = %q, want %q", cfg.ActivationClientID, DefaultActivationClientID)
 	}
 	if cfg.AuthorizationURL != DefaultAuthorizationURL {
 		t.Errorf("AuthorizationURL = %q, want %q", cfg.AuthorizationURL, DefaultAuthorizationURL)

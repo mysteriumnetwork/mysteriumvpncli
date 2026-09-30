@@ -40,10 +40,11 @@ func (e *HTTPStatusError) Error() string {
 
 // Options configures browser activation and token refresh.
 type Options struct {
-	ClientID         string
-	AuthorizationURL string
-	PollInterval     time.Duration
-	AuthTimeout      time.Duration
+	ClientID           string
+	ActivationClientID string
+	AuthorizationURL   string
+	PollInterval       time.Duration
+	AuthTimeout        time.Duration
 }
 
 // StartResult contains the protected activation state and browser URL.
@@ -67,8 +68,8 @@ func NewService(authClient *client.Client, store CredentialStore, options Option
 
 // Start creates and stores a new browser activation.
 func (s *Service) Start(ctx context.Context) (StartResult, error) {
-	if strings.TrimSpace(s.options.ClientID) == "" {
-		return StartResult{}, errors.New("authentication client ID must not be empty")
+	if strings.TrimSpace(s.options.ActivationClientID) == "" {
+		return StartResult{}, errors.New("activation client ID must not be empty")
 	}
 	if s.options.AuthTimeout <= 0 {
 		return StartResult{}, errors.New("authentication timeout must be positive")
@@ -78,7 +79,7 @@ func (s *Service) Start(ctx context.Context) (StartResult, error) {
 	if err != nil {
 		return StartResult{}, fmt.Errorf("generate activation ID: %w", err)
 	}
-	authorizationURL, err := buildAuthorizationURL(s.options.AuthorizationURL, s.options.ClientID, activationID)
+	authorizationURL, err := buildAuthorizationURL(s.options.AuthorizationURL, s.options.ActivationClientID, activationID)
 	if err != nil {
 		return StartResult{}, err
 	}

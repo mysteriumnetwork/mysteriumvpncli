@@ -206,6 +206,9 @@ func TestRunConnectCleansStateWhenTunnelFails(t *testing.T) {
 	if exitCode != 1 {
 		t.Fatalf("runConnect() exit code = %d, want 1", exitCode)
 	}
+	if !strings.Contains(stderr.String(), "wg-quick up failed") || !strings.Contains(stderr.String(), `config_path="`+configPath+`"`) {
+		t.Errorf("stderr = %q, want wg-quick error with config path", stderr.String())
+	}
 	if _, err := os.Stat(configPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("config Stat() error = %v, want os.ErrNotExist", err)
 	}
