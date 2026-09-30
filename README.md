@@ -3,7 +3,7 @@
 `mystvpn` is a Linux command-line client for connecting to Mysterium VPN with
 WireGuard.
 
-The MVP supports username/password authentication, country discovery,
+The MVP supports browser activation authentication, country discovery,
 connection establishment, refresh, local status, disconnect, and logout.
 
 ## Requirements
@@ -31,7 +31,7 @@ This creates a `mystvpn` executable in the repository root.
 ./mystvpn help
 ./mystvpn version
 
-./mystvpn auth --username alice
+./mystvpn auth
 ./mystvpn countries --ip-type residential
 ./mystvpn connect --country DE --ip-type residential
 ./mystvpn status
@@ -45,18 +45,16 @@ Running `mystvpn` without a command also prints the command overview.
 ### Authentication
 
 ```sh
-./mystvpn auth --username alice
+./mystvpn auth
 ```
 
-When run interactively, the command securely prompts for the password. A
-password can be supplied explicitly for non-interactive use:
-
-```sh
-./mystvpn auth --username alice --password secret
-```
-
-The explicit form can expose the password through shell history or process
-inspection, so the interactive prompt is preferred.
+The command creates a short-lived activation and prints a browser URL. Open the
+URL, sign in if needed, and approve access. The CLI does not open the browser
+automatically; it polls the API until approval succeeds or the five-minute
+activation expires. It securely stores the resulting access and refresh
+tokens. The access token is attached automatically to later API calls; an
+unauthorized response triggers one refresh-token exchange and retries the
+request once.
 
 ### Countries
 
@@ -124,8 +122,8 @@ removing the locally stored authentication and refresh tokens.
 
 ## Security
 
-- Authentication tokens are stored in owner-only files in the current user's
-  configuration directory.
+- Access and refresh tokens, along with pending browser activation state, are
+  stored in owner-only files in the current user's configuration directory.
 - The app-owned WireGuard keypair, active session, and generated WireGuard
   configuration are stored with owner-only permissions.
 - WireGuard private keys and authentication tokens are never included in normal

@@ -71,12 +71,17 @@ func New(baseURL string, timeout time.Duration, debug bool) (*Client, error) {
 	}, nil
 }
 
-// SetToken sets the bearer token included in subsequent requests. Passing an
-// empty token removes the Authorization header.
-func (c *Client) SetToken(token string) {
+// SetAccessToken sets the bearer token included in subsequent requests.
+// Passing an empty token removes the Authorization header.
+func (c *Client) SetAccessToken(token string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.token = strings.TrimSpace(token)
+}
+
+// SetToken is retained for callers that do not distinguish token types.
+func (c *Client) SetToken(token string) {
+	c.SetAccessToken(token)
 }
 
 // SetUnauthorizedHandler sets a callback that obtains a new bearer token after
@@ -89,28 +94,35 @@ func (c *Client) SetUnauthorizedHandler(handler func(context.Context) (string, e
 
 // Get sends a GET request and decodes its JSON response into responseBody.
 func (c *Client) Get(ctx context.Context, endpoint string, responseBody any) error {
-	_, err := c.do(ctx, http.MethodGet, endpoint, nil, responseBody)
+	_, err := c.do(ctx, http.MethodGet, endpoint, nil, responseBody, false)
 	return err
 }
 
 // Post sends a POST request with a JSON body and decodes its JSON response.
 func (c *Client) Post(ctx context.Context, endpoint string, requestBody, responseBody any) error {
-	_, err := c.do(ctx, http.MethodPost, endpoint, requestBody, responseBody)
+	_, err := c.do(ctx, http.MethodPost, endpoint, requestBody, responseBody, false)
 	return err
 }
 
 // PostWithStatus sends a POST request and also returns its HTTP status code.
 func (c *Client) PostWithStatus(ctx context.Context, endpoint string, requestBody, responseBody any) (int, error) {
-	return c.do(ctx, http.MethodPost, endpoint, requestBody, responseBody)
+	return c.do(ctx, http.MethodPost, endpoint, requestBody, responseBody, false)
+}
+
+// PostWithStatusDebug sends a POST request and, only when client debugging is
+// enabled, logs its JSON payload and raw unsuccessful response body. Callers
+// must not use this method for requests containing tokens or other secrets.
+func (c *Client) PostWithStatusDebug(ctx context.Context, endpoint string, requestBody, responseBody any) (int, error) {
+	return c.do(ctx, http.MethodPost, endpoint, requestBody, responseBody, true)
 }
 
 // Delete sends a DELETE request and decodes its JSON response into responseBody.
 func (c *Client) Delete(ctx context.Context, endpoint string, responseBody any) error {
-	_, err := c.do(ctx, http.MethodDelete, endpoint, nil, responseBody)
+	_, err := c.do(ctx, http.MethodDelete, endpoint, nil, responseBody, false)
 	return err
 }
 
-func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, responseBody any) (int, error) {
+func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, responseBody any, debugBody bool) (int, error) {
 	requestURL, err := c.resolveURL(endpoint)
 	if err != nil {
 		return 0, err
@@ -122,6 +134,9 @@ func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, r
 		if err != nil {
 			return 0, fmt.Errorf("encode request body: %w", err)
 		}
+	}
+	if debugBody && requestBody != nil {
+		c.debugf("%s %s request body: %s", method, requestURL, encodedBody)
 	}
 
 	retryAttempt := 0
@@ -162,6 +177,12 @@ func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, r
 			return response.StatusCode, readErr
 		}
 		c.debugf("%s %s returned %s", method, requestURL, response.Status)
+		if debugBody {
+			c.debugf("%s %s response status: %d", method, requestURL, response.StatusCode)
+			if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+				c.debugf("%s %s response body: %s", method, requestURL, body)
+			}
+		}
 
 		if response.StatusCode == http.StatusUnauthorized && !refreshed {
 			if handler := c.unauthorizedHandler(); handler != nil {
@@ -172,7 +193,7 @@ func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, r
 				if strings.TrimSpace(token) == "" {
 					return response.StatusCode, errors.New("refresh authorization: empty auth token")
 				}
-				c.SetToken(token)
+				c.SetAccessToken(token)
 				refreshed = true
 				continue
 			}

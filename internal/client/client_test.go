@@ -1,11 +1,14 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -119,6 +122,69 @@ func TestClientReturnsAPIError(t *testing.T) {
 	}
 	if apiErr.Details == nil {
 		t.Error("Details = nil, want response details")
+	}
+}
+
+func TestPostWithStatusDebugLogsRequestAndFailureResponse(t *testing.T) {
+	const responseBody = `{"error":"invalid activation request"}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(responseBody))
+	}))
+	defer server.Close()
+
+	var output bytes.Buffer
+	apiClient, err := New(server.URL+"/api/v1", time.Second, true)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	apiClient.Logger = log.New(&output, "", 0)
+	requestBody := struct {
+		ID string `json:"id"`
+	}{ID: "223e4567-e89b-42d3-a456-426614174000"}
+
+	statusCode, err := apiClient.PostWithStatusDebug(context.Background(), "/auth/activation", requestBody, nil)
+	if statusCode != http.StatusBadRequest || err == nil {
+		t.Fatalf("PostWithStatusDebug() = status %d, error %v; want 400 error", statusCode, err)
+	}
+
+	logOutput := output.String()
+	for _, expected := range []string{
+		"POST " + server.URL + "/api/v1/auth/activation",
+		`request body: {"id":"223e4567-e89b-42d3-a456-426614174000"}`,
+		"response status: 400",
+		"response body: " + responseBody,
+	} {
+		if !strings.Contains(logOutput, expected) {
+			t.Errorf("debug output = %q, want %q", logOutput, expected)
+		}
+	}
+}
+
+func TestPostWithStatusDoesNotLogSensitiveBodies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":"secret-response-detail"}`))
+	}))
+	defer server.Close()
+
+	var output bytes.Buffer
+	apiClient, err := New(server.URL, time.Second, true)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	apiClient.Logger = log.New(&output, "", 0)
+	_, _ = apiClient.PostWithStatus(
+		context.Background(),
+		"/oauth/token",
+		map[string]string{"code_verifier": "secret-verifier"},
+		nil,
+	)
+
+	for _, secret := range []string{"secret-verifier", "secret-response-detail"} {
+		if strings.Contains(output.String(), secret) {
+			t.Errorf("standard debug output exposed %q: %q", secret, output.String())
+		}
 	}
 }
 

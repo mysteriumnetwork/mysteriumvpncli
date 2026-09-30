@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/proxy"
@@ -18,28 +19,31 @@ const (
 
 // Snapshot contains the non-sensitive requests observed by a Server.
 type Snapshot struct {
-	AuthCalls          int
-	TokenRefreshCalls  int
-	CountryQueries     []string
-	ConnectRequests    []proxy.ConnectRequest
-	DisconnectRequests []proxy.DisconnectRequest
+	AuthCalls           int
+	ActivationPollCalls int
+	TokenRefreshCalls   int
+	CountryQueries      []string
+	ConnectRequests     []proxy.ConnectRequest
+	DisconnectRequests  []proxy.DisconnectRequest
 }
 
-// Server is a stateful Sentinel-compatible and proxy-compatible test server.
+// Server is a stateful auth-compatible and proxy-compatible test server.
 type Server struct {
 	server *httptest.Server
 
-	mu                 sync.Mutex
-	authStatus         int
-	connectStatus      int
-	disconnectStatus   int
-	unauthorizedProxy  int
-	authCalls          int
-	tokenRefreshCalls  int
-	countryQueries     []string
-	connectRequests    []proxy.ConnectRequest
-	successfulConnects int
-	disconnectRequests []proxy.DisconnectRequest
+	mu                  sync.Mutex
+	authStatus          int
+	connectStatus       int
+	disconnectStatus    int
+	unauthorizedProxy   int
+	authCalls           int
+	activationPollCalls int
+	tokenRefreshCalls   int
+	pendingActivationID string
+	countryQueries      []string
+	connectRequests     []proxy.ConnectRequest
+	successfulConnects  int
+	disconnectRequests  []proxy.DisconnectRequest
 }
 
 // New starts a local mock API server.
@@ -54,17 +58,12 @@ func (s *Server) Close() {
 	s.server.Close()
 }
 
-// SentinelURL returns the base URL used by authentication requests.
-func (s *Server) SentinelURL() string {
-	return s.server.URL + "/api/v1"
-}
-
 // APIURL returns the versioned base URL used by proxy requests.
 func (s *Server) APIURL() string {
 	return s.server.URL + "/api/v1"
 }
 
-// SetAuthStatus overrides the password-auth response status. Zero restores success.
+// SetAuthStatus overrides the activation creation response status. Zero restores success.
 func (s *Server) SetAuthStatus(statusCode int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -97,78 +96,102 @@ func (s *Server) Snapshot() Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return Snapshot{
-		AuthCalls:          s.authCalls,
-		TokenRefreshCalls:  s.tokenRefreshCalls,
-		CountryQueries:     append([]string(nil), s.countryQueries...),
-		ConnectRequests:    append([]proxy.ConnectRequest(nil), s.connectRequests...),
-		DisconnectRequests: append([]proxy.DisconnectRequest(nil), s.disconnectRequests...),
+		AuthCalls:           s.authCalls,
+		ActivationPollCalls: s.activationPollCalls,
+		TokenRefreshCalls:   s.tokenRefreshCalls,
+		CountryQueries:      append([]string(nil), s.countryQueries...),
+		ConnectRequests:     append([]proxy.ConnectRequest(nil), s.connectRequests...),
+		DisconnectRequests:  append([]proxy.DisconnectRequest(nil), s.disconnectRequests...),
 	}
 }
 
 func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
-	switch request.URL.Path {
-	case "/api/v1/auth/password":
-		s.handleAuth(writer, request)
-	case "/api/v1/token/refresh":
-		s.handleTokenRefresh(writer, request)
-	case "/api/v1/connection/config":
+	switch {
+	case request.URL.Path == "/api/v1/auth/activation" && request.Method == http.MethodPost:
+		s.handleActivationStart(writer, request)
+	case strings.HasPrefix(request.URL.Path, "/api/v1/auth/activation/") && request.Method == http.MethodGet:
+		s.handleActivationPoll(writer, request)
+	case request.URL.Path == "/api/v1/oauth/token":
+		s.handleOAuthToken(writer, request)
+	case request.URL.Path == "/api/v1/connection/config":
 		s.handleCountries(writer, request)
-	case "/api/v1/connection/connect":
+	case request.URL.Path == "/api/v1/connection/connect":
 		s.handleConnect(writer, request)
-	case "/api/v1/connection/disconnect":
+	case request.URL.Path == "/api/v1/connection/disconnect":
 		s.handleDisconnect(writer, request)
 	default:
 		http.NotFound(writer, request)
 	}
 }
 
-func (s *Server) handleAuth(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		writer.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
+func (s *Server) handleActivationStart(writer http.ResponseWriter, request *http.Request) {
 	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Pool     string `json:"pool"`
+		ID string `json:"id"`
 	}
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Username == "" || body.Password == "" || body.Pool == "" {
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.ID == "" {
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	s.mu.Lock()
 	s.authCalls++
+	s.pendingActivationID = body.ID
 	statusCode := s.authStatus
 	s.mu.Unlock()
-	if statusCode != 0 && statusCode != http.StatusOK {
+	if statusCode != 0 && statusCode != http.StatusOK && statusCode != http.StatusNoContent {
 		writer.WriteHeader(statusCode)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{
-		"auth_token":    authToken,
-		"refresh_token": refreshToken,
+	if statusCode == http.StatusNoContent {
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writer.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleActivationPoll(writer http.ResponseWriter, request *http.Request) {
+	activationID := strings.TrimPrefix(request.URL.Path, "/api/v1/auth/activation/")
+	s.mu.Lock()
+	if activationID == "" || activationID != s.pendingActivationID {
+		s.mu.Unlock()
+		writer.WriteHeader(http.StatusNotFound)
+		return
+	}
+	s.activationPollCalls++
+	s.mu.Unlock()
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"id":    activationID,
+		"valid": true,
+		"token": map[string]any{
+			"access_token":  authToken,
+			"refresh_token": refreshToken,
+			"token_type":    "Bearer",
+			"expires_in":    3600,
+			"user_id":       "test-user",
+		},
 	})
 }
 
-func (s *Server) handleTokenRefresh(writer http.ResponseWriter, request *http.Request) {
+func (s *Server) handleOAuthToken(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var body struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Token != refreshToken {
+	var body map[string]string
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || len(body) != 3 || body["client_id"] != "cli" || body["grant_type"] != "refresh_token" || body["refresh_token"] != refreshToken {
 		writer.WriteHeader(http.StatusUnauthorized)
 		return
 	}
+
 	s.mu.Lock()
 	s.tokenRefreshCalls++
 	s.mu.Unlock()
-	writeJSON(writer, http.StatusOK, map[string]string{
-		"auth_token":    authToken,
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"access_token":  authToken,
 		"refresh_token": refreshToken,
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"user_id":       "test-user",
 	})
 }
 
@@ -240,7 +263,7 @@ func (s *Server) handleConnect(writer http.ResponseWriter, request *http.Request
 }
 
 func (s *Server) handleDisconnect(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
+	if request.Method != http.MethodGet {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
@@ -248,13 +271,13 @@ func (s *Server) handleDisconnect(writer http.ResponseWriter, request *http.Requ
 		writer.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-	var body proxy.DisconnectRequest
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.PublicKey == "" {
+	publicKey := request.URL.Query().Get("public_key")
+	if publicKey == "" {
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	s.mu.Lock()
-	s.disconnectRequests = append(s.disconnectRequests, body)
+	s.disconnectRequests = append(s.disconnectRequests, proxy.DisconnectRequest{PublicKey: publicKey})
 	statusCode := s.disconnectStatus
 	s.mu.Unlock()
 	if statusCode != 0 && statusCode != http.StatusNoContent {

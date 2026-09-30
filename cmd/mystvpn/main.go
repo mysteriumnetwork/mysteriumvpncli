@@ -18,7 +18,6 @@ import (
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/proxy"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/state"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/wireguard"
-	"golang.org/x/term"
 )
 
 var version = "dev"
@@ -61,7 +60,7 @@ func runWithDependencies(args []string, stdin *os.File, stdout, stderr io.Writer
 
 	switch args[0] {
 	case "auth":
-		return runAuth(args[1:], cfg, stdin, stdout, stderr)
+		return runAuth(args[1:], cfg, stdout, stderr)
 	case "countries":
 		return runCountries(args[1:], cfg, stdout, stderr)
 	case "connect":
@@ -241,8 +240,8 @@ func establishConnection(command string, cfg config.Config, stdout, stderr io.Wr
 		}
 	} else {
 		configPath = activeSession.ConfigPath
-		if err := tunnelRunner.Down(context.Background(), configPath); err != nil {
-			fmt.Fprintf(stderr, "mystvpn %s: %v\n", command, err)
+		if err := tunnelRunner.Down(context.Background(), configPath); err != nil && !errors.Is(err, wireguard.ErrTunnelAlreadyDown) {
+			writeTunnelCommandError(stderr, command, configPath, err)
 			return 1
 		}
 		if err := wireguard.UpdateConfig(configPath, response.WGConfig, keyPair.PrivateKey); err != nil {
@@ -276,7 +275,7 @@ func establishConnection(command string, cfg config.Config, stdout, stderr io.Wr
 	}
 	if err := tunnelRunner.Up(context.Background(), configPath); err != nil {
 		clearSessionFiles(sessionStore, configPath)
-		fmt.Fprintf(stderr, "mystvpn %s: %v\n", command, err)
+		writeTunnelCommandError(stderr, command, configPath, err)
 		return 1
 	}
 
@@ -381,7 +380,7 @@ func disconnectSession(command string, cfg config.Config, stderr io.Writer, tunn
 		return false
 	}
 	if err := tunnelRunner.Down(context.Background(), session.ConfigPath); err != nil {
-		fmt.Fprintf(stderr, "mystvpn %s: %v\n", command, err)
+		writeTunnelCommandError(stderr, command, session.ConfigPath, err)
 		return false
 	}
 
@@ -405,6 +404,10 @@ func acceptsNoArguments(command string, args []string, stderr io.Writer) bool {
 func clearSessionFiles(sessionStore *state.Store, configPath string) {
 	_ = sessionStore.Clear()
 	_ = wireguard.RemoveConfig(configPath)
+}
+
+func writeTunnelCommandError(output io.Writer, command, configPath string, err error) {
+	fmt.Fprintf(output, "mystvpn %s: %v (config_path=%q)\n", command, err, configPath)
 }
 
 func writeSessionRequestError(output io.Writer, command string, err error) {
@@ -520,45 +523,17 @@ func writeCountriesError(output io.Writer, err error) {
 	fmt.Fprintln(output, "mystvpn countries: request failed")
 }
 
-func runAuth(args []string, cfg config.Config, stdin *os.File, stdout, stderr io.Writer) int {
-	flags := flag.NewFlagSet("auth", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	username := flags.String("username", "", "account username")
-	password := flags.String("password", "", "account password")
-	flags.Usage = func() {}
-
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprintln(stderr, `mystvpn auth: help flags are not supported; use "mystvpn help"`)
-		}
+func runAuth(args []string, cfg config.Config, stdout, stderr io.Writer) int {
+	if !acceptsNoArguments("auth", args, stderr) {
 		return 2
 	}
-	if flags.NArg() != 0 {
-		fmt.Fprintf(stderr, "mystvpn auth: unexpected argument %q\n", flags.Arg(0))
-		return 2
+	if cfg.AuthPollInterval <= 0 {
+		fmt.Fprintln(stderr, "mystvpn auth: invalid poll interval")
+		return 1
 	}
-	if strings.TrimSpace(*username) == "" {
-		fmt.Fprintln(stderr, "mystvpn auth: --username is required")
-		return 2
-	}
-
-	passwordProvided := false
-	flags.Visit(func(option *flag.Flag) {
-		if option.Name == "password" {
-			passwordProvided = true
-		}
-	})
-	if !passwordProvided {
-		promptedPassword, err := promptPassword(stdin, stderr)
-		if err != nil {
-			fmt.Fprintf(stderr, "mystvpn auth: %v\n", err)
-			return 2
-		}
-		*password = promptedPassword
-	}
-	if *password == "" {
-		fmt.Fprintln(stderr, "mystvpn auth: --password must not be empty")
-		return 2
+	if cfg.AuthTimeout <= 0 {
+		fmt.Fprintln(stderr, "mystvpn auth: invalid authentication timeout")
+		return 1
 	}
 
 	service, err := newAuthService(cfg)
@@ -566,7 +541,27 @@ func runAuth(args []string, cfg config.Config, stdin *os.File, stdout, stderr io
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
-	if err := service.Login(context.Background(), *username, *password); err != nil {
+	result, err := service.Start(context.Background())
+	if err != nil {
+		writeAuthenticationError(stderr, err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, "Open this URL in your browser to authenticate:")
+	fmt.Fprintln(stdout, result.AuthorizationURL)
+	fmt.Fprintln(stdout, "Waiting for authentication approval...")
+	pollContext, cancel := context.WithTimeout(context.Background(), cfg.AuthTimeout)
+	defer cancel()
+	if err := service.Poll(pollContext); err != nil {
+		_ = service.Cancel()
+		if errors.Is(err, auth.ErrAuthenticationTimedOut) {
+			fmt.Fprintln(stderr, "mystvpn auth: authentication timed out")
+			return 1
+		}
+		if errors.Is(err, auth.ErrActivationInvalid) {
+			fmt.Fprintln(stderr, "mystvpn auth: activation expired or was rejected")
+			return 1
+		}
 		writeAuthenticationError(stderr, err)
 		return 1
 	}
@@ -574,7 +569,6 @@ func runAuth(args []string, cfg config.Config, stdin *os.File, stdout, stderr io
 	fmt.Fprintln(stdout, "Authentication successful.")
 	return 0
 }
-
 func writeAuthenticationError(output io.Writer, err error) {
 	var statusErr *auth.HTTPStatusError
 	if errors.As(err, &statusErr) {
@@ -613,6 +607,10 @@ func runLogout(args []string, cfg config.Config, stdout, stderr io.Writer, tunne
 		fmt.Fprintf(stderr, "mystvpn logout: %v\n", err)
 		return 1
 	}
+	if err := store.ClearPendingAuth(); err != nil {
+		fmt.Fprintf(stderr, "mystvpn logout: %v\n", err)
+		return 1
+	}
 
 	fmt.Fprintln(stdout, "Logout successful.")
 	return 0
@@ -623,25 +621,17 @@ func newAuthService(cfg config.Config) (*auth.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	sentinelClient, err := client.New(cfg.SentinelURL, cfg.Timeout, cfg.Debug)
+	authClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
 	if err != nil {
 		return nil, err
 	}
-	return auth.NewService(sentinelClient, store, cfg.Pool), nil
-}
-
-func promptPassword(stdin *os.File, output io.Writer) (string, error) {
-	if stdin == nil || !term.IsTerminal(int(stdin.Fd())) {
-		return "", errors.New("password is required; provide --password when standard input is not interactive")
-	}
-
-	fmt.Fprint(output, "Password: ")
-	password, err := term.ReadPassword(int(stdin.Fd()))
-	fmt.Fprintln(output)
-	if err != nil {
-		return "", fmt.Errorf("read password: %w", err)
-	}
-	return string(password), nil
+	return auth.NewService(authClient, store, auth.Options{
+		ClientID:           cfg.AuthClientID,
+		ActivationClientID: cfg.ActivationClientID,
+		AuthorizationURL:   cfg.AuthorizationURL,
+		PollInterval:       cfg.AuthPollInterval,
+		AuthTimeout:        cfg.AuthTimeout,
+	}), nil
 }
 
 func isCommand(name string) bool {
@@ -662,7 +652,7 @@ func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "Commands:")
 	for _, command := range commands {
 		if command == "auth" {
-			fmt.Fprintln(output, "  auth --username <name> [--password <value>]")
+			fmt.Fprintln(output, "  auth")
 			continue
 		}
 		if command == "countries" {

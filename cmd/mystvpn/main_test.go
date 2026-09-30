@@ -10,11 +10,18 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/auth"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/client"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/config"
 )
+
+type testTokenRequest struct {
+	GrantType    string `json:"grant_type"`
+	ClientID     string `json:"client_id"`
+	RefreshToken string `json:"refresh_token"`
+}
 
 func TestRunWithoutArgumentsPrintsUsage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -53,7 +60,7 @@ func TestRunHelpListsCommands(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0", exitCode)
 	}
-	for _, expected := range []string{"help", "version", "auth --username <name>", "countries --ip-type <residential|hosting>", "disconnect"} {
+	for _, expected := range []string{"help", "version", "  auth\n", "countries --ip-type <residential|hosting>", "disconnect"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("help output does not contain %q: %q", expected, stdout.String())
 		}
@@ -100,27 +107,41 @@ func TestRunRejectsRootFlags(t *testing.T) {
 
 func TestRunAuth(t *testing.T) {
 	configureTestHome(t)
+	var activationID string
+	var pollCalls atomic.Int32
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v1/auth/password" {
-			t.Errorf("path = %q, want password auth endpoint", request.URL.Path)
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/auth/activation":
+			var body map[string]string
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			activationID = body["id"]
+			if len(body) != 1 || activationID == "" {
+				t.Errorf("request body = %v, want only activation id", body)
+			}
+			writer.WriteHeader(http.StatusOK)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/auth/activation/"+activationID:
+			call := pollCalls.Add(1)
+			if call < 2 {
+				_, _ = writer.Write([]byte(`{"id":"` + activationID + `","valid":true,"token":null}`))
+				return
+			}
+			_, _ = writer.Write([]byte(`{"id":"` + activationID + `","valid":true,"token":{"access_token":"test-access-token","refresh_token":"test-refresh-token","token_type":"Bearer","expires_in":3600,"user_id":"user-123"}}`))
+		default:
+			http.NotFound(writer, request)
 		}
-		var body map[string]string
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		if body["username"] != "alice" || body["password"] != "secret" || body["pool"] != "dvpn" {
-			t.Errorf("request body = %v, want credentials and dvpn pool", body)
-		}
-		_, _ = writer.Write([]byte(`{"auth_token":"auth-value","refresh_token":"refresh-value"}`))
 	}))
 	defer server.Close()
 
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
-	cfg.SentinelURL = server.URL + "/api/v1"
+	cfg.APIURL = server.URL + "/api/v1"
+	cfg.AuthPollInterval = time.Millisecond
+	cfg.AuthTimeout = time.Second
 	exitCode := runWithConfig(
-		[]string{"auth", "--username", "alice", "--password", "secret"},
+		[]string{"auth"},
 		nil,
 		&stdout,
 		&stderr,
@@ -130,33 +151,133 @@ func TestRunAuth(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	if stdout.String() != "Authentication successful.\n" {
-		t.Errorf("stdout = %q, want success message", stdout.String())
+	wantOutput := "Open this URL in your browser to authenticate:\n" +
+		"https://app.mysteriumvpn.com/oauth/authorize?client_id=cli&request_id=" + activationID + "&response_type=activation_none\n" +
+		"Waiting for authentication approval...\n" +
+		"Authentication successful.\n"
+	if stdout.String() != wantOutput {
+		t.Errorf("stdout = %q, want %q", stdout.String(), wantOutput)
+	}
+	if pollCalls.Load() != 2 {
+		t.Errorf("poll calls = %d, want 2", pollCalls.Load())
 	}
 	store, err := auth.NewDefaultFileStore()
 	if err != nil {
 		t.Fatalf("NewDefaultFileStore() error = %v", err)
 	}
-	authToken, err := store.LoadAuthToken()
-	if err != nil || authToken != "auth-value" {
-		t.Errorf("stored auth token = %q, error = %v", authToken, err)
+	if _, err := store.LoadPendingAuth(); !errors.Is(err, auth.ErrPendingAuthNotFound) {
+		t.Errorf("LoadPendingAuth() error = %v, want cleared pending state", err)
+	}
+	accessToken, err := store.LoadAccessToken()
+	if err != nil || accessToken != "test-access-token" {
+		t.Errorf("LoadAccessToken() = %q, %v; want test-access-token", accessToken, err)
 	}
 	refreshToken, err := store.LoadRefreshToken()
-	if err != nil || refreshToken != "refresh-value" {
-		t.Errorf("stored refresh token = %q, error = %v", refreshToken, err)
+	if err != nil || refreshToken != "test-refresh-token" {
+		t.Errorf("LoadRefreshToken() = %q, %v; want test-refresh-token", refreshToken, err)
 	}
 }
 
-func TestRunAuthRequiresPasswordForNonInteractiveInput(t *testing.T) {
+func TestRunAuthTimesOutAndClearsPendingState(t *testing.T) {
+	configureTestHome(t)
+	var pollCalls atomic.Int32
+	var activationID string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/auth/activation":
+			var body map[string]string
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			activationID = body["id"]
+			writer.WriteHeader(http.StatusNoContent)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/auth/activation/"+activationID:
+			pollCalls.Add(1)
+			_, _ = writer.Write([]byte(`{"id":"` + activationID + `","valid":true,"token":null}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	cfg := config.Load()
+	cfg.APIURL = server.URL + "/api/v1"
+	cfg.AuthPollInterval = 5 * time.Millisecond
+	cfg.AuthTimeout = 25 * time.Millisecond
+	exitCode := runWithConfig(
+		[]string{"auth"},
+		nil,
+		&stdout,
+		&stderr,
+		cfg,
+	)
+
+	if exitCode != 1 {
+		t.Fatalf("run() exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "Open this URL in your browser to authenticate:\n") || !strings.Contains(stdout.String(), "client_id=cli") || !strings.Contains(stdout.String(), "Waiting for authentication approval...\n") {
+		t.Errorf("stdout = %q, want browser activation instructions", stdout.String())
+	}
+	if got, want := stderr.String(), "mystvpn auth: authentication timed out\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	if pollCalls.Load() < 2 {
+		t.Errorf("poll calls = %d, want at least 2", pollCalls.Load())
+	}
+	store := defaultTestStore(t)
+	if _, err := store.LoadPendingAuth(); !errors.Is(err, auth.ErrPendingAuthNotFound) {
+		t.Errorf("LoadPendingAuth() error = %v, want cleared pending state", err)
+	}
+}
+
+func TestRunAuthReportsInvalidActivationAndClearsPendingState(t *testing.T) {
+	configureTestHome(t)
+	var activationID string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/auth/activation":
+			var body map[string]string
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			activationID = body["id"]
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/auth/activation/"+activationID:
+			_, _ = writer.Write([]byte(`{"id":"` + activationID + `","valid":false,"token":null}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	cfg := config.Load()
+	cfg.APIURL = server.URL + "/api/v1"
+	cfg.AuthPollInterval = time.Millisecond
+	cfg.AuthTimeout = time.Second
+	exitCode := runWithConfig([]string{"auth"}, nil, &stdout, &stderr, cfg)
+
+	if exitCode != 1 {
+		t.Fatalf("run() exit code = %d, want 1", exitCode)
+	}
+	if got, want := stderr.String(), "mystvpn auth: activation expired or was rejected\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	if !strings.Contains(stdout.String(), "client_id=cli") {
+		t.Errorf("stdout = %q, want cli authorization URL", stdout.String())
+	}
+	store := defaultTestStore(t)
+	if _, err := store.LoadPendingAuth(); !errors.Is(err, auth.ErrPendingAuthNotFound) {
+		t.Errorf("LoadPendingAuth() error = %v, want cleared pending state", err)
+	}
+}
+
+func TestRunAuthRejectsEmailFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	exitCode := run([]string{"auth", "--username", "alice"}, nil, &stdout, &stderr)
+	exitCode := run([]string{"auth", "--email", "alice@example.com"}, nil, &stdout, &stderr)
 
 	if exitCode != 2 {
 		t.Fatalf("run() exit code = %d, want 2", exitCode)
 	}
-	if !strings.Contains(stderr.String(), "provide --password when standard input is not interactive") {
-		t.Errorf("stderr = %q, want non-interactive password error", stderr.String())
+	if !strings.Contains(stderr.String(), `unexpected argument "--email"`) {
+		t.Errorf("stderr = %q, want rejected email flag", stderr.String())
 	}
 }
 
@@ -171,9 +292,9 @@ func TestRunAuthReportsOnlyHTTPStatus(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
-	cfg.SentinelURL = server.URL + "/api/v1"
+	cfg.APIURL = server.URL + "/api/v1"
 	exitCode := runWithConfig(
-		[]string{"auth", "--username", "alice", "--password", "wrong"},
+		[]string{"auth"},
 		nil,
 		&stdout,
 		&stderr,
@@ -188,43 +309,13 @@ func TestRunAuthReportsOnlyHTTPStatus(t *testing.T) {
 	}
 }
 
-func TestRunAuthRejectsNonAuthFlags(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-
-	exitCode := run([]string{"auth", "--username", "alice", "--pool", "other"}, nil, &stdout, &stderr)
-
-	if exitCode != 2 {
-		t.Fatalf("run() exit code = %d, want 2", exitCode)
-	}
-	if !strings.Contains(stderr.String(), "flag provided but not defined: -pool") {
-		t.Errorf("stderr = %q, want unknown auth flag error", stderr.String())
-	}
-}
-
-func TestRunAuthRejectsHelpFlags(t *testing.T) {
-	for _, option := range []string{"--help", "-h"} {
-		t.Run(option, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-
-			exitCode := run([]string{"auth", option}, nil, &stdout, &stderr)
-
-			if exitCode != 2 {
-				t.Fatalf("run() exit code = %d, want 2", exitCode)
-			}
-			if !strings.Contains(stderr.String(), "help flags are not supported") {
-				t.Errorf("stderr = %q, want unsupported-help error", stderr.String())
-			}
-		})
-	}
-}
-
 func TestRunCountries(t *testing.T) {
 	for _, ipType := range []string{"residential", "hosting"} {
 		t.Run(ipType, func(t *testing.T) {
 			configureTestHome(t)
 			store := defaultTestStore(t)
-			if err := store.SaveAuthToken("auth-value"); err != nil {
-				t.Fatalf("SaveAuthToken() error = %v", err)
+			if err := store.SaveAccessToken("auth-value"); err != nil {
+				t.Fatalf("SaveAccessToken() error = %v", err)
 			}
 
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -307,8 +398,8 @@ func TestRunCountriesRequiresAuthentication(t *testing.T) {
 func TestRunCountriesReportsHTTPStatus(t *testing.T) {
 	configureTestHome(t)
 	store := defaultTestStore(t)
-	if err := store.SaveAuthToken("auth-value"); err != nil {
-		t.Fatalf("SaveAuthToken() error = %v", err)
+	if err := store.SaveAccessToken("auth-value"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -360,44 +451,42 @@ func TestWriteCountriesErrorReportsCommonHTTPStatuses(t *testing.T) {
 func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 	configureTestHome(t)
 	store := defaultTestStore(t)
-	if err := store.SaveAuthToken("old-auth"); err != nil {
-		t.Fatalf("SaveAuthToken() error = %v", err)
+	if err := store.SaveAccessToken("old-auth"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
 	}
 	if err := store.SaveRefreshToken("old-refresh"); err != nil {
 		t.Fatalf("SaveRefreshToken() error = %v", err)
 	}
 
 	var refreshCalls atomic.Int32
-	authServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		refreshCalls.Add(1)
-		if request.URL.Path != "/api/v1/token/refresh" {
-			t.Errorf("refresh path = %q", request.URL.Path)
-		}
-		var body map[string]string
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatalf("decode refresh request: %v", err)
-		}
-		if body["token"] != "old-refresh" {
-			t.Errorf("refresh token = %q, want old-refresh", body["token"])
-		}
-		_, _ = writer.Write([]byte(`{"auth_token":"new-auth","refresh_token":"new-refresh"}`))
-	}))
-	defer authServer.Close()
-
 	var apiCalls atomic.Int32
 	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		apiCalls.Add(1)
-		if request.Header.Get("Authorization") != "Bearer new-auth" {
-			writer.WriteHeader(http.StatusUnauthorized)
-			return
+		switch request.URL.Path {
+		case "/api/v1/oauth/token":
+			refreshCalls.Add(1)
+			var body testTokenRequest
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode refresh request: %v", err)
+			}
+			if body.GrantType != "refresh_token" || body.RefreshToken != "old-refresh" || body.ClientID != "cli" {
+				t.Errorf("refresh request = %v, want refresh-token grant", body)
+			}
+			_, _ = writer.Write([]byte(`{"access_token":"new-auth","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`))
+		case "/api/v1/connection/config":
+			apiCalls.Add(1)
+			if request.Header.Get("Authorization") != "Bearer new-auth" {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = writer.Write([]byte(`{"countries":["CA"],"top_countries":["CA"]}`))
+		default:
+			http.NotFound(writer, request)
 		}
-		_, _ = writer.Write([]byte(`{"countries":["CA"],"top_countries":["CA"]}`))
 	}))
 	defer apiServer.Close()
 
 	cfg := config.Load()
-	cfg.APIURL = apiServer.URL
-	cfg.SentinelURL = authServer.URL + "/api/v1"
+	cfg.APIURL = apiServer.URL + "/api/v1"
 	var stdout, stderr bytes.Buffer
 	exitCode := runWithConfig(
 		[]string{"countries", "--ip-type", "residential"},
@@ -416,7 +505,7 @@ func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 	if apiCalls.Load() != 2 || refreshCalls.Load() != 1 {
 		t.Errorf("api calls = %d, refresh calls = %d; want 2 and 1", apiCalls.Load(), refreshCalls.Load())
 	}
-	authToken, err := store.LoadAuthToken()
+	authToken, err := store.LoadAccessToken()
 	if err != nil || authToken != "new-auth" {
 		t.Errorf("stored auth token = %q, error = %v", authToken, err)
 	}
@@ -461,8 +550,8 @@ func TestRunLogoutClearsTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDefaultFileStore() error = %v", err)
 	}
-	if err := store.SaveAuthToken("auth-value"); err != nil {
-		t.Fatalf("SaveAuthToken() error = %v", err)
+	if err := store.SaveAccessToken("auth-value"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
 	}
 	if err := store.SaveRefreshToken("refresh-value"); err != nil {
 		t.Fatalf("SaveRefreshToken() error = %v", err)
@@ -477,8 +566,8 @@ func TestRunLogoutClearsTokens(t *testing.T) {
 	if stdout.String() != "Logout successful.\n" {
 		t.Errorf("stdout = %q, want logout success message", stdout.String())
 	}
-	if _, err := store.LoadAuthToken(); !errors.Is(err, auth.ErrTokenNotFound) {
-		t.Errorf("LoadAuthToken() error = %v, want ErrTokenNotFound", err)
+	if _, err := store.LoadAccessToken(); !errors.Is(err, auth.ErrTokenNotFound) {
+		t.Errorf("LoadAccessToken() error = %v, want ErrTokenNotFound", err)
 	}
 	if _, err := store.LoadRefreshToken(); !errors.Is(err, auth.ErrTokenNotFound) {
 		t.Errorf("LoadRefreshToken() error = %v, want ErrTokenNotFound", err)

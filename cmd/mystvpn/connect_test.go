@@ -21,8 +21,8 @@ import (
 func TestRunConnect(t *testing.T) {
 	configureTestHome(t)
 	tokenStore := defaultTestStore(t)
-	if err := tokenStore.SaveAuthToken("auth-value"); err != nil {
-		t.Fatalf("SaveAuthToken() error = %v", err)
+	if err := tokenStore.SaveAccessToken("auth-value"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
 	}
 
 	var requestedPublicKey string
@@ -170,8 +170,8 @@ func TestWriteConnectRequestErrorReportsHTTPStatus(t *testing.T) {
 func TestRunConnectCleansStateWhenTunnelFails(t *testing.T) {
 	configureTestHome(t)
 	tokenStore := defaultTestStore(t)
-	if err := tokenStore.SaveAuthToken("auth-value"); err != nil {
-		t.Fatalf("SaveAuthToken() error = %v", err)
+	if err := tokenStore.SaveAccessToken("auth-value"); err != nil {
+		t.Fatalf("SaveAccessToken() error = %v", err)
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -205,6 +205,9 @@ func TestRunConnectCleansStateWhenTunnelFails(t *testing.T) {
 
 	if exitCode != 1 {
 		t.Fatalf("runConnect() exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "wg-quick up failed") || !strings.Contains(stderr.String(), `config_path="`+configPath+`"`) {
+		t.Errorf("stderr = %q, want wg-quick error with config path", stderr.String())
 	}
 	if _, err := os.Stat(configPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("config Stat() error = %v, want os.ErrNotExist", err)
