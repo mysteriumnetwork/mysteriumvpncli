@@ -25,6 +25,33 @@ go build ./cmd/mystvpn
 
 This creates a `mystvpn` executable in the repository root.
 
+## Install
+
+Install the latest GitHub release on Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | bash
+```
+
+The installer supports amd64, arm32 (ARMv7), and arm64. It verifies the release
+archive's SHA-256 checksum and installs `mystvpn` to `/usr/local/bin`. Re-running
+it updates the binary to the latest release. Override the destination with
+`MYSTVPN_INSTALL_DIR` (an absolute path):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | MYSTVPN_INSTALL_DIR="$HOME/.local/bin" bash
+```
+
+It checks for curl, tar, gzip, coreutils, WireGuard tools (`wg` and `wg-quick`),
+iproute, sysctl, resolvconf, and either nftables or iptables. Missing dependencies are
+installed using apt-get, dnf, yum, pacman, or zypper, with sudo when required.
+On other distributions, install the missing dependencies manually and rerun.
+The initial `curl` command and Bash must already be available. Your Linux kernel
+must support WireGuard; the installer does not change or upgrade the kernel.
+
+Use the same privileged user for authentication and VPN commands, for example
+`sudo mystvpn auth` followed by `sudo mystvpn connect --country DE --ip-type residential`.
+
 ## Usage
 
 ```sh
@@ -147,6 +174,10 @@ contact external services or modify real network interfaces.
 GitHub Actions runs the test suite with the race detector for every pull request.
 Pushing any tag runs the tests, then builds Linux binaries for amd64, arm32
 (ARMv7), and arm64 with CGO disabled. The tag is embedded in `mystvpn version`.
+
+After all builds succeed, CI publishes a GitHub release for the tag containing
+the archives and their `.sha256` files. New releases remain drafts until all
+assets have been uploaded. The installer downloads from the latest release.
 
 Download the `mystvpn-linux-<architecture>` artifacts from the tagged workflow
 run. Each contains a `.tar.gz` archive with the executable's permissions
