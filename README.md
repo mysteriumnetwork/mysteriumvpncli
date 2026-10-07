@@ -141,3 +141,13 @@ go test ./...
 
 The test suite uses local mock APIs and a fake WireGuard runner. It does not
 contact external services or modify real network interfaces.
+
+## CI
+
+GitHub Actions runs the test suite with the race detector for every pull request.
+Pushing any tag runs the tests, then builds Linux binaries for amd64, arm32
+(ARMv7), and arm64 with CGO disabled. The tag is embedded in `mystvpn version`.
+
+Download the `mystvpn-linux-<architecture>` artifacts from the tagged workflow
+run. Each contains a `.tar.gz` archive with the executable's permissions
+preserved; extract it with `tar -xzf mystvpn-linux-<architecture>.tar.gz`.
