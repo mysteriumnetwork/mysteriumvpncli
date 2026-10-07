@@ -29,6 +29,11 @@ jobs:
           bash -n install.sh
           shellcheck install.sh
           python3 test/install_test.py
+      - name: Check Debian packaging
+        run: |
+          bash -n scripts/package-deb.sh
+          shellcheck scripts/package-deb.sh
+          python3 test/package_deb_test.py
 
   build:
     name: Build Linux ${{ matrix.arch }}
@@ -41,12 +46,15 @@ jobs:
       matrix:
         include:
           - arch: amd64
+            debarch: amd64
             goarch: amd64
             goarm: ''
           - arch: arm32
+            debarch: armhf
             goarch: arm
             goarm: '7'
           - arch: arm64
+            debarch: arm64
             goarch: arm64
             goarm: ''
     steps:
@@ -70,11 +78,18 @@ jobs:
           go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o dist/mystvpn ./cmd/mystvpn
           tar -czf "dist/mystvpn-linux-${ARCH}.tar.gz" -C dist mystvpn
           (cd dist && sha256sum "mystvpn-linux-${ARCH}.tar.gz" > "mystvpn-linux-${ARCH}.tar.gz.sha256")
-      - name: Upload binary
+      - name: Build Debian package
+        env:
+          VERSION: ${{ github.ref_name }}
+          DEBARCH: ${{ matrix.debarch }}
+        run: bash scripts/package-deb.sh dist/mystvpn "$VERSION" "$DEBARCH" dist
+      - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
           name: mystvpn-linux-${{ matrix.arch }}
-          path: dist/*.tar.gz*
+          path: |
+            dist/*.tar.gz*
+            dist/*.deb*
           if-no-files-found: error
 
   release:
@@ -90,7 +105,7 @@ jobs:
           pattern: mystvpn-linux-*
           merge-multiple: true
           path: dist
-      - name: Publish binaries and checksums
+      - name: Publish packages and checksums
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

@@ -27,6 +27,21 @@ This creates a `mystvpn` executable in the repository root.
 
 ## Install
 
+On Debian or Ubuntu, download the `.deb` package for your architecture from
+[GitHub Releases](https://github.com/mysteriumnetwork/mysteriumvpncli/releases)
+and install it with apt, for example:
+
+```sh
+sudo apt install ./mystvpn_1.2.3_amd64.deb
+```
+
+Replace the example filename with the downloaded package. Packages are available
+for amd64, armhf (ARMv7), and arm64 and install `mystvpn` to `/usr/bin`. Apt installs
+the required CA certificates, WireGuard tools, iproute2, procps, resolvconf (or
+openresolv), and nftables (or iptables). The Linux kernel must support WireGuard.
+If switching from the shell installer, remove its `/usr/local/bin/mystvpn` first
+so it does not take precedence over the packaged executable.
+
 Install the latest GitHub release on Linux:
 
 ```sh
@@ -176,9 +191,11 @@ Pushing any tag runs the tests, then builds Linux binaries for amd64, arm32
 (ARMv7), and arm64 with CGO disabled. The tag is embedded in `mystvpn version`.
 
 After all builds succeed, CI publishes a GitHub release for the tag containing
-the archives and their `.sha256` files. New releases remain drafts until all
+the archives, Debian packages, and their `.sha256` files. New releases remain drafts until all
 assets have been uploaded. The installer downloads from the latest release.
 
 Download the `mystvpn-linux-<architecture>` artifacts from the tagged workflow
 run. Each contains a `.tar.gz` archive with the executable's permissions
-preserved; extract it with `tar -xzf mystvpn-linux-<architecture>.tar.gz`.
+preserved; extract it with `tar -xzf mystvpn-linux-<architecture>.tar.gz`. Each
+artifact also includes the matching `.deb` package and checksum. Debian package
+versions omit the tag's leading `v` and use `~` for prerelease separators.
