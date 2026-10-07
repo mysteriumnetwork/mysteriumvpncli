@@ -37,7 +37,12 @@ elif name == "curl":
             digest = "0" * 64
         pathlib.Path(output).write_text(digest + "  archive\n")
     else:
+        if url.endswith(".deb") and os.environ.get("DEB_MISSING"):
+            print("404", end="")
+            sys.exit(22)
         shutil.copyfile(root / "archive", output)
+        if url.endswith(".deb"):
+            print("200", end="")
 elif name == "sha256sum":
     print(hashlib.sha256(pathlib.Path(args[0]).read_bytes()).hexdigest() + "  " + args[0])
 elif name == "sudo":
@@ -47,6 +52,8 @@ elif name == "sudo":
         sys.exit(0)
     os.execvp(args[1], args[1:])
 elif name in ("apt-get", "dnf", "yum", "pacman", "zypper"):
+    if os.environ.get("APT_FAIL"):
+        sys.exit(1)
     if "update" not in args:
         for dependency in ("wg", "wg-quick", "ip", "sysctl", "resolvconf", "iptables"):
             target = root / "bin" / dependency
@@ -66,7 +73,7 @@ class InstallerTest(unittest.TestCase):
         self.dest.mkdir()
         self.env = dict(os.environ, FIXTURE=str(self.root), PATH=str(self.bin),
                         MYSTVPN_INSTALL_DIR=str(self.dest), TMPDIR=str(self.root))
-        for name in ("tar", "gzip", "install", "mktemp", "rm", "env"):
+        for name in ("tar", "gzip", "install", "mktemp", "rm", "env", "sed", "chmod"):
             (self.bin / name).symlink_to(shutil.which(name))
         for name in ("uname", "curl", "sha256sum", "sudo", *DEPENDENCIES):
             self.mock(name)
@@ -117,6 +124,54 @@ class InstallerTest(unittest.TestCase):
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("apt-get", (self.root / "calls").read_text())
+
+    def test_debian_packages_preferred(self):
+        self.mock("apt-get")
+        for machine, arch in (("x86_64", "amd64"), ("armv7l", "armhf"), ("aarch64", "arm64")):
+            with self.subTest(machine=machine):
+                (self.root / "calls").write_text("")
+                result = self.run_installer(MYSTVPN_INSTALL_DIR="", TEST_ARCH=machine)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = (self.root / "calls").read_text()
+                self.assertIn(f"mystvpn_1.2.3_{arch}.deb", calls)
+                self.assertIn("apt-get install -y", calls)
+                self.assertNotIn(".tar.gz", calls)
+                self.assertIn("/usr/bin/mystvpn using apt", result.stdout)
+
+    def test_missing_debian_package_falls_back(self):
+        self.mock("apt-get")
+        # Use a mocked install command to avoid writing to /usr/local/bin.
+        (self.bin / "install").unlink()
+        self.mock("install")
+        result = self.run_installer(MYSTVPN_INSTALL_DIR="", DEB_MISSING="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("installing the archive", result.stdout)
+        self.assertIn("mystvpn-linux-amd64.tar.gz", (self.root / "calls").read_text())
+
+    def test_bad_debian_checksum_does_not_fall_back(self):
+        self.mock("apt-get")
+        result = self.run_installer(MYSTVPN_INSTALL_DIR="", BAD_CHECKSUM="1")
+        self.assertNotEqual(result.returncode, 0)
+        calls = (self.root / "calls").read_text()
+        self.assertNotIn("apt-get install", calls)
+        self.assertNotIn(".tar.gz", calls)
+
+    def test_debian_download_failure_does_not_fall_back(self):
+        self.mock("apt-get")
+        # Only asset downloads fail; release discovery must still succeed.
+        mock = self.bin / "curl"
+        mock.write_text(mock.read_text().replace(
+            'if os.environ.get("DOWNLOAD_FAIL"):',
+            'if os.environ.get("DOWNLOAD_FAIL") and not args[-1].endswith("/latest"):'))
+        result = self.run_installer(MYSTVPN_INSTALL_DIR="", DOWNLOAD_FAIL="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(".tar.gz", (self.root / "calls").read_text())
+
+    def test_apt_failure_does_not_fall_back(self):
+        self.mock("apt-get")
+        result = self.run_installer(MYSTVPN_INSTALL_DIR="", APT_FAIL="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(".tar.gz", (self.root / "calls").read_text())
 
     def test_checksum_failure_preserves_existing_install(self):
         target = self.dest / "mystvpn"

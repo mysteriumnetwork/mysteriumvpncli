@@ -48,16 +48,23 @@ Install the latest GitHub release on Linux:
 curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | bash
 ```
 
-The installer supports amd64, arm32 (ARMv7), and arm64. It verifies the release
-archive's SHA-256 checksum and installs `mystvpn` to `/usr/local/bin`. Re-running
-it updates the binary to the latest release. Override the destination with
+The installer supports amd64, arm32 (ARMv7), and arm64. On apt-based systems it
+prefers the release's Debian package, verifies its SHA-256 checksum, and uses
+apt to install `mystvpn` to `/usr/bin` along with its dependencies. If the release
+has no Debian package, or on other distributions, it verifies and installs the
+archive to `/usr/local/bin`. Download, checksum, and apt failures stop installation.
+Re-running it updates to the latest release. Override the destination with
 `MYSTVPN_INSTALL_DIR` (an absolute path):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | MYSTVPN_INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
-It checks for curl, tar, gzip, coreutils, WireGuard tools (`wg` and `wg-quick`),
+Setting `MYSTVPN_INSTALL_DIR` selects archive installation even on apt-based
+systems. When switching from an older archive installation, remove
+`/usr/local/bin/mystvpn` so it does not shadow the Debian package's executable.
+
+For archive installation, it checks for curl, tar, gzip, coreutils, WireGuard tools (`wg` and `wg-quick`),
 iproute, sysctl, resolvconf, and either nftables or iptables. Missing dependencies are
 installed using apt-get, dnf, yum, pacman, or zypper, with sudo when required.
 On other distributions, install the missing dependencies manually and rerun.
