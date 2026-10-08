@@ -90,7 +90,18 @@ class InstallerTest(unittest.TestCase):
         path.chmod(0o755)
 
     def run_installer(self, **env):
-        return subprocess.run([shutil.which("bash")], input=INSTALLER.read_text(),
+        # The installer adds system sbin directories to PATH. Keep discovery
+        # inside the fixture so host dependencies and managers cannot leak in.
+        discovery = '''
+command() {
+    if [[ $1 == -v ]]; then
+        PATH="$FIXTURE/bin" builtin command "$@"
+    else
+        builtin command "$@"
+    fi
+}
+'''
+        return subprocess.run([shutil.which("bash")], input=discovery + INSTALLER.read_text(),
                               env=dict(self.env, **env), capture_output=True, text=True)
 
     def test_architectures_and_upgrade(self):
