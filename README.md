@@ -27,6 +27,8 @@ This creates a `mystvpn` executable in the repository root.
 
 ## Install
 
+### Debian or Ubuntu package
+
 On Debian or Ubuntu, download the `.deb` package for your architecture from
 [GitHub Releases](https://github.com/mysteriumnetwork/mysteriumvpncli/releases)
 and install it with apt, for example:
@@ -42,10 +44,12 @@ openresolv), and nftables (or iptables). The Linux kernel must support WireGuard
 If switching from the shell installer, remove its `/usr/local/bin/mystvpn` first
 so it does not take precedence over the packaged executable.
 
+### Shell installer
+
 Install the latest GitHub release on Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | bash
+curl -fsSL https://github.com/mysteriumnetwork/mysteriumvpncli/releases/latest/download/install.sh | bash
 ```
 
 The installer supports amd64, arm32 (ARMv7), and arm64. On apt-based systems it
@@ -57,7 +61,7 @@ Re-running it updates to the latest release. Override the destination with
 `MYSTVPN_INSTALL_DIR` (an absolute path):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | MYSTVPN_INSTALL_DIR="$HOME/.local/bin" bash
+curl -fsSL https://github.com/mysteriumnetwork/mysteriumvpncli/releases/latest/download/install.sh | MYSTVPN_INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
 Setting `MYSTVPN_INSTALL_DIR` selects archive installation even on apt-based
@@ -77,16 +81,16 @@ Use the same privileged user for authentication and VPN commands, for example
 ## Usage
 
 ```sh
-./mystvpn help
-./mystvpn version
+mystvpn help
+mystvpn version
 
-./mystvpn auth
-./mystvpn countries --ip-type residential
-./mystvpn connect --country DE --ip-type residential
-./mystvpn status
-./mystvpn refresh
-./mystvpn disconnect
-./mystvpn logout
+mystvpn auth
+mystvpn countries --ip-type residential
+mystvpn connect --country DE --ip-type residential
+mystvpn status
+mystvpn refresh
+mystvpn disconnect
+mystvpn logout
 ```
 
 Running `mystvpn` without a command also prints the command overview.
@@ -94,7 +98,7 @@ Running `mystvpn` without a command also prints the command overview.
 ### Authentication
 
 ```sh
-./mystvpn auth
+mystvpn auth
 ```
 
 The command creates a short-lived activation and prints a browser URL. Open the
@@ -108,8 +112,8 @@ request once.
 ### Countries
 
 ```sh
-./mystvpn countries --ip-type residential
-./mystvpn countries --ip-type hosting
+mystvpn countries --ip-type residential
+mystvpn countries --ip-type hosting
 ```
 
 The command prints available two-letter country codes alphabetically, with up
@@ -118,7 +122,7 @@ to ten codes per line.
 ### Connect
 
 ```sh
-./mystvpn connect --country DE --ip-type residential
+mystvpn connect --country DE --ip-type residential
 ```
 
 Both flags are required. The IP type must be `residential` or `hosting`, and the
@@ -163,7 +167,7 @@ the active session state.
 ### Logout
 
 ```sh
-./mystvpn logout
+mystvpn logout
 ```
 
 If a tunnel is active, logout disconnects it locally and remotely before
@@ -198,7 +202,7 @@ Pushing any tag runs the tests, then builds Linux binaries for amd64, arm32
 (ARMv7), and arm64 with CGO disabled. The tag is embedded in `mystvpn version`.
 
 After all builds succeed, CI publishes a GitHub release for the tag containing
-the archives, Debian packages, and their `.sha256` files. New releases remain drafts until all
+the installer script, archives, Debian packages, and their `.sha256` files. New releases remain drafts until all
 assets have been uploaded. The installer downloads from the latest release.
 
 Download the `mystvpn-linux-<architecture>` artifacts from the tagged workflow
