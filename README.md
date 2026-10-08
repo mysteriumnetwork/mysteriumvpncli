@@ -25,6 +25,55 @@ go build ./cmd/mystvpn
 
 This creates a `mystvpn` executable in the repository root.
 
+## Install
+
+On Debian or Ubuntu, download the `.deb` package for your architecture from
+[GitHub Releases](https://github.com/mysteriumnetwork/mysteriumvpncli/releases)
+and install it with apt, for example:
+
+```sh
+sudo apt install ./mystvpn_1.2.3_amd64.deb
+```
+
+Replace the example filename with the downloaded package. Packages are available
+for amd64, armhf (ARMv7), and arm64 and install `mystvpn` to `/usr/bin`. Apt installs
+the required CA certificates, WireGuard tools, iproute2, procps, resolvconf (or
+openresolv), and nftables (or iptables). The Linux kernel must support WireGuard.
+If switching from the shell installer, remove its `/usr/local/bin/mystvpn` first
+so it does not take precedence over the packaged executable.
+
+Install the latest GitHub release on Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | bash
+```
+
+The installer supports amd64, arm32 (ARMv7), and arm64. On apt-based systems it
+prefers the release's Debian package, verifies its SHA-256 checksum, and uses
+apt to install `mystvpn` to `/usr/bin` along with its dependencies. If the release
+has no Debian package, or on other distributions, it verifies and installs the
+archive to `/usr/local/bin`. Download, checksum, and apt failures stop installation.
+Re-running it updates to the latest release. Override the destination with
+`MYSTVPN_INSTALL_DIR` (an absolute path):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | MYSTVPN_INSTALL_DIR="$HOME/.local/bin" bash
+```
+
+Setting `MYSTVPN_INSTALL_DIR` selects archive installation even on apt-based
+systems. When switching from an older archive installation, remove
+`/usr/local/bin/mystvpn` so it does not shadow the Debian package's executable.
+
+For archive installation, it checks for curl, tar, gzip, coreutils, WireGuard tools (`wg` and `wg-quick`),
+iproute, sysctl, resolvconf, and either nftables or iptables. Missing dependencies are
+installed using apt-get, dnf, yum, pacman, or zypper, with sudo when required.
+On other distributions, install the missing dependencies manually and rerun.
+The initial `curl` command and Bash must already be available. Your Linux kernel
+must support WireGuard; the installer does not change or upgrade the kernel.
+
+Use the same privileged user for authentication and VPN commands, for example
+`sudo mystvpn auth` followed by `sudo mystvpn connect --country DE --ip-type residential`.
+
 ## Usage
 
 ```sh
@@ -141,3 +190,19 @@ go test ./...
 
 The test suite uses local mock APIs and a fake WireGuard runner. It does not
 contact external services or modify real network interfaces.
+
+## CI
+
+GitHub Actions runs the test suite with the race detector for every pull request.
+Pushing any tag runs the tests, then builds Linux binaries for amd64, arm32
+(ARMv7), and arm64 with CGO disabled. The tag is embedded in `mystvpn version`.
+
+After all builds succeed, CI publishes a GitHub release for the tag containing
+the archives, Debian packages, and their `.sha256` files. New releases remain drafts until all
+assets have been uploaded. The installer downloads from the latest release.
+
+Download the `mystvpn-linux-<architecture>` artifacts from the tagged workflow
+run. Each contains a `.tar.gz` archive with the executable's permissions
+preserved; extract it with `tar -xzf mystvpn-linux-<architecture>.tar.gz`. Each
+artifact also includes the matching `.deb` package and checksum. Debian package
+versions omit the tag's leading `v` and use `~` for prerelease separators.
