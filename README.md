@@ -1,141 +1,150 @@
 # mystvpn
 
-`mystvpn` is a Linux command-line client for connecting to Mysterium VPN with
-WireGuard.
+A Linux command-line client for connecting to Mysterium VPN with WireGuard.
+Sign in through your browser, choose a country, and manage your VPN connection
+from the terminal.
 
-The MVP supports browser activation authentication, country discovery,
-connection establishment, refresh, local status, disconnect, and logout.
+- [Quick start](#quick-start)
+- [Installation](#installation)
+- [Everyday use](#everyday-use)
+- [Updating](#updating)
+- [Advanced setup](#advanced-setup)
+- [Security](#security)
+- [Development](#development)
 
-## Requirements
+## Quick start
 
-- Go 1.27 or later to build from source
-- `wg-quick` installed on the target Linux system
-- Permission to create and remove WireGuard interfaces
+You need Linux with WireGuard kernel support, Bash, and curl. The installer
+installs missing dependencies on supported distributions and requests sudo
+access when needed. You do not need Go to use a release build.
 
-`mystvpn` does not elevate privileges automatically. Run all commands that use
-persisted credentials or connection state under the same operating-system user.
-
-## Build
-
-From the repository root:
+**1. Install the latest release.**
 
 ```sh
-go build ./cmd/mystvpn
+curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | bash
 ```
 
-This creates a `mystvpn` executable in the repository root.
+**2. Sign in.**
 
-## Install
+```sh
+sudo mystvpn auth
+```
 
-### Debian or Ubuntu package
+Open the URL printed in the terminal, sign in, and approve access. The command
+waits for approval; the link expires after five minutes.
 
-On Debian or Ubuntu, download the `.deb` package for your architecture from
-[GitHub Releases](https://github.com/mysteriumnetwork/mysteriumvpncli/releases)
-and install it with apt, for example:
+**3. Choose a country and connect.**
+
+```sh
+sudo mystvpn countries --ip-type residential
+sudo mystvpn connect --country DE --ip-type residential
+```
+
+Replace `DE` with a country code from the list. You can also use `hosting`
+instead of `residential` for both commands.
+
+**4. Check your connection or disconnect.**
+
+```sh
+sudo mystvpn status
+sudo mystvpn disconnect
+```
+
+Use the same operating-system user for authentication and all VPN commands.
+The examples use `sudo` consistently because creating WireGuard interfaces
+requires privileges. If you are already root, omit `sudo`. The CLI does not
+elevate privileges automatically.
+
+## Installation
+
+### Automatic installer (recommended)
+
+The [quick start](#quick-start) command detects your architecture and chooses
+an installation method:
+
+| System | Installation method | Executable |
+| --- | --- | --- |
+| Debian, Ubuntu, or another apt-based system | Debian package, installed through apt | `/usr/bin/mystvpn` |
+| Other supported Linux distributions | Standalone binary from the release archive | `/usr/local/bin/mystvpn` |
+
+If the latest release has no Debian package, the installer falls back to the
+standalone binary. It verifies SHA-256 checksums before installing either format.
+Download, checksum, and apt failures stop installation.
+
+For custom destinations and dependency details, see [Advanced setup](#advanced-setup).
+If you previously installed a standalone binary on an apt-based system, see
+[Switching from standalone to a Debian package](#switching-from-standalone-to-a-debian-package).
+
+### Install a Debian package manually
+
+Download the `.deb` for your system from
+[GitHub Releases](https://github.com/mysteriumnetwork/mysteriumvpncli/releases).
+Check your Debian architecture with:
+
+```sh
+dpkg --print-architecture
+```
+
+Install the downloaded file with apt. For example:
 
 ```sh
 sudo apt install ./mystvpn_1.2.3_amd64.deb
 ```
 
-Replace the example filename with the downloaded package. Packages are available
-for amd64, armhf (ARMv7), and arm64 and install `mystvpn` to `/usr/bin`. Apt installs
-the required CA certificates, WireGuard tools, iproute2, procps, resolvconf (or
-openresolv), and nftables (or iptables). The Linux kernel must support WireGuard.
-If switching from the shell installer, remove its `/usr/local/bin/mystvpn` first
-so it does not take precedence over the packaged executable.
+Replace the example filename with the file you downloaded. Apt installs the
+runtime dependencies and places the executable at `/usr/bin/mystvpn`.
 
-### Shell installer
+### Supported architectures
 
-Install the latest GitHub release on Linux:
+The automatic installer selects the correct architecture for you. When
+downloading files manually, use these names:
 
-```sh
-curl -fsSL https://github.com/mysteriumnetwork/mysteriumvpncli/releases/latest/download/install.sh | bash
-```
+| Linux architecture (`uname -m`) | Archive filename | Debian architecture |
+| --- | --- | --- |
+| `x86_64` / `amd64` | `mystvpn-linux-amd64.tar.gz` | `amd64` |
+| `aarch64` / `arm64` | `mystvpn-linux-arm64.tar.gz` | `arm64` |
+| `armv7l` / `armv8l` (32-bit ARM, ARMv7 or later) | `mystvpn-linux-arm32.tar.gz` | `armhf` |
 
-The installer supports amd64, arm32 (ARMv7), and arm64. On apt-based systems it
-prefers the release's Debian package, verifies its SHA-256 checksum, and uses
-apt to install `mystvpn` to `/usr/bin` along with its dependencies. If the release
-has no Debian package, or on other distributions, it verifies and installs the
-archive to `/usr/local/bin`. Download, checksum, and apt failures stop installation.
-Re-running it updates to the latest release. Override the destination with
-`MYSTVPN_INSTALL_DIR` (an absolute path):
+Debian filenames follow `mystvpn_<version>_<architecture>.deb`.
 
-```sh
-curl -fsSL https://github.com/mysteriumnetwork/mysteriumvpncli/releases/latest/download/install.sh | MYSTVPN_INSTALL_DIR="$HOME/.local/bin" bash
-```
+## Everyday use
 
-Setting `MYSTVPN_INSTALL_DIR` selects archive installation even on apt-based
-systems. When switching from an older archive installation, remove
-`/usr/local/bin/mystvpn` so it does not shadow the Debian package's executable.
+### Command reference
 
-For archive installation, it checks for curl, tar, gzip, coreutils, WireGuard tools (`wg` and `wg-quick`),
-iproute, sysctl, resolvconf, and either nftables or iptables. Missing dependencies are
-installed using apt-get, dnf, yum, pacman, or zypper, with sudo when required.
-On other distributions, install the missing dependencies manually and rerun.
-The initial `curl` command and Bash must already be available. Your Linux kernel
-must support WireGuard; the installer does not change or upgrade the kernel.
+| Command | What it does |
+| --- | --- |
+| `mystvpn help` | Show available commands. Running `mystvpn` alone also shows help. |
+| `mystvpn version` | Show the installed version. |
+| `sudo mystvpn auth` | Sign in through browser approval. |
+| `sudo mystvpn countries --ip-type residential` | List available country codes for an IP type. |
+| `sudo mystvpn connect --country DE --ip-type residential` | Connect to a country, replacing any active connection. |
+| `sudo mystvpn status` | Show the locally saved connection status. |
+| `sudo mystvpn refresh` | Reconnect with the current country and IP type. |
+| `sudo mystvpn disconnect` | Disconnect the VPN. |
+| `sudo mystvpn logout` | Disconnect and remove stored authentication tokens. |
 
-Use the same privileged user for authentication and VPN commands, for example
-`sudo mystvpn auth` followed by `sudo mystvpn connect --country DE --ip-type residential`.
+### Choose or change a location
 
-## Usage
+List countries for the IP type you want:
 
 ```sh
-mystvpn help
-mystvpn version
-
-mystvpn auth
-mystvpn countries --ip-type residential
-mystvpn connect --country DE --ip-type residential
-mystvpn status
-mystvpn refresh
-mystvpn disconnect
-mystvpn logout
+sudo mystvpn countries --ip-type residential
+sudo mystvpn countries --ip-type hosting
 ```
 
-Running `mystvpn` without a command also prints the command overview.
-
-### Authentication
+Country codes are listed alphabetically, with up to ten codes per line.
+To connect, provide both a two-letter country code and an IP type
+(`residential` or `hosting`):
 
 ```sh
-mystvpn auth
+sudo mystvpn connect --country DE --ip-type residential
 ```
 
-The command creates a short-lived activation and prints a browser URL. Open the
-URL, sign in if needed, and approve access. The CLI does not open the browser
-automatically; it polls the API until approval succeeds or the five-minute
-activation expires. It securely stores the resulting access and refresh
-tokens. The access token is attached automatically to later API calls; an
-unauthorized response triggers one refresh-token exchange and retries the
-request once.
+Run `connect` again with another country or IP type to replace the active
+connection. You do not need to disconnect first. The client requests the new
+configuration before bringing the existing tunnel down.
 
-### Countries
-
-```sh
-mystvpn countries --ip-type residential
-mystvpn countries --ip-type hosting
-```
-
-The command prints available two-letter country codes alphabetically, with up
-to ten codes per line.
-
-### Connect
-
-```sh
-mystvpn connect --country DE --ip-type residential
-```
-
-Both flags are required. The IP type must be `residential` or `hosting`, and the
-country must be a two-letter code. The command creates or reuses the app-owned
-WireGuard keypair, requests a configuration, and runs `wg-quick up`.
-
-If a connection is already active, `connect` replaces it using the saved
-WireGuard keypair. It requests the new configuration before bringing the
-existing tunnel down, updates the managed configuration at the same path, and
-then brings the tunnel back up. An explicit remote disconnect is not required
-for this replacement flow.
-
-Successful output contains only connection metadata:
+A successful connection prints:
 
 ```text
 exit_ip: 1.2.3.4
@@ -143,9 +152,13 @@ country: DE
 city: berlin
 ```
 
-### Active session
+### Check or refresh a connection
 
-`mystvpn status` reads local state without making an API request:
+```sh
+sudo mystvpn status
+```
+
+Example output:
 
 ```text
 connected: yes
@@ -154,59 +167,180 @@ country: DE
 city: berlin
 ```
 
-When there is no active session it prints `connected: no`.
+Status reads local state without making an API request; it is not a live
+connectivity check. With no active session, it prints `connected: no`.
 
-`mystvpn refresh` reconnects using the active session's saved country, IP type,
-and WireGuard keypair. It replaces the managed configuration at the same path,
-brings the tunnel back up, and prints the new connection metadata.
-
-`mystvpn disconnect` closes the remote connection using the saved public key,
-runs `wg-quick down`, removes the managed WireGuard configuration, and clears
-the active session state.
-
-### Logout
+To reconnect using the saved country and IP type:
 
 ```sh
-mystvpn logout
+sudo mystvpn refresh
 ```
 
-If a tunnel is active, logout disconnects it locally and remotely before
-removing the locally stored authentication and refresh tokens.
+Refresh reuses the saved WireGuard keypair and prints the new connection
+metadata. It requires an active session.
+
+### Disconnect or sign out
+
+```sh
+sudo mystvpn disconnect
+```
+
+Disconnect closes the remote connection, brings down the local WireGuard
+tunnel, and removes the managed configuration and active session state.
+
+To also remove your stored authentication tokens:
+
+```sh
+sudo mystvpn logout
+```
+
+Logout disconnects an active tunnel locally and remotely before removing tokens.
+
+## Updating
+
+### Update with the installer
+
+Rerun the [quick start installation command](#quick-start) to install the latest
+release. On apt-based systems, it upgrades the Debian package; for standalone
+installations, it replaces the binary in the installation directory.
+
+If you used `MYSTVPN_INSTALL_DIR`, use the same setting again when updating
+(see [Custom installation directory](#custom-installation-directory)). The
+installer chooses its method on each run rather than detecting how you
+previously installed the program.
+
+Check the installed version afterward:
+
+```sh
+mystvpn version
+```
+
+### Update a manually installed Debian package
+
+Download the newer `.deb` from
+[GitHub Releases](https://github.com/mysteriumnetwork/mysteriumvpncli/releases)
+and run `sudo apt install ./<downloaded-filename>.deb` with its actual filename.
+You can also use the automatic installer.
+
+### Switching from standalone to a Debian package
+
+An older `/usr/local/bin/mystvpn` can take precedence over the packaged
+`/usr/bin/mystvpn`. The installer warns about this but leaves the old file in place.
+
+After installing the Debian package, remove the previous standalone binary:
+
+```sh
+sudo rm /usr/local/bin/mystvpn
+hash -r
+mystvpn version
+```
+
+If you used a custom directory, remove that old copy instead. Use
+`command -v mystvpn` to check which executable your shell finds.
+
+## Advanced setup
+
+### Custom installation directory
+
+Set `MYSTVPN_INSTALL_DIR` to an absolute path:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | MYSTVPN_INSTALL_DIR="$HOME/.local/bin" bash
+```
+
+This selects standalone installation even on apt-based systems. Add the
+directory to your `PATH` or invoke the binary by its full path. If sudo does
+not search your custom directory, use the full path for every command, for example:
+
+```sh
+sudo "$HOME/.local/bin/mystvpn" auth
+sudo "$HOME/.local/bin/mystvpn" connect --country DE --ip-type residential
+```
+
+A writable installation directory avoids needing root to copy the binary,
+but installing system dependencies and managing the VPN can still require privileges.
+
+### Dependencies
+
+All installation methods require a Linux kernel with WireGuard support.
+The installer does not change or upgrade the kernel.
+
+| Purpose | Required tools or packages |
+| --- | --- |
+| WireGuard tunnel | `wireguard-tools` (`wg` and `wg-quick`) |
+| Network configuration | `iproute2` (called `iproute` on some distributions) and `sysctl` from `procps` / `procps-ng` |
+| DNS configuration | `resolvconf` or `openresolv` |
+| Routing rules | `nftables` or `iptables` |
+| HTTPS downloads | `curl` and CA certificates |
+| Standalone archive installation | Bash, `tar`, `gzip`, and `coreutils` |
+
+The Debian package declares its runtime dependencies so apt can install them.
+For standalone installation, the installer checks for required commands and
+installs missing packages using `apt-get`, `dnf`, `yum`, `pacman`, or `zypper`.
+On other distributions, install missing dependencies manually and rerun it.
+Bash and curl must already be available to run the installation command.
 
 ## Security
 
-- Access and refresh tokens, along with pending browser activation state, are
-  stored in owner-only files in the current user's configuration directory.
-- The app-owned WireGuard keypair, active session, and generated WireGuard
-  configuration are stored with owner-only permissions.
+- Authentication uses a browser approval URL; the CLI does not open the browser
+  automatically. Access and refresh tokens are saved in owner-only files in the
+  current user's configuration directory, along with pending activation state.
+- Access tokens are attached automatically to API calls. An unauthorized response
+  triggers one refresh-token exchange and one retry.
+- The app-owned WireGuard keypair, active session, and generated configuration
+  have owner-only permissions. Connection replacements and refreshes reuse the
+  keypair and managed configuration path.
 - WireGuard private keys and authentication tokens are never included in normal
   command output or debug HTTP logs.
-- The generated WireGuard configuration contains the private key and should not
-  be copied or made accessible to other users.
-- Only WireGuard configuration paths managed by `mystvpn` are accepted by the
-  refresh and disconnect commands.
+- The generated WireGuard configuration contains the private key. Do not copy it
+  or make it accessible to other users.
+- Refresh and disconnect accept only WireGuard configuration paths managed by
+  `mystvpn`.
 
-## Tests
+## Development
+
+### Build from source
+
+Go 1.27 or later is required. From the repository root:
+
+```sh
+go build ./cmd/mystvpn
+```
+
+This creates `./mystvpn`. Running it on Linux requires the same runtime
+dependencies and privileges as a release build.
+
+### Run tests
 
 ```sh
 go test ./...
 ```
 
-The test suite uses local mock APIs and a fake WireGuard runner. It does not
+The Go test suite uses local mock APIs and a fake WireGuard runner. It does not
 contact external services or modify real network interfaces.
 
-## CI
+Installer and Debian packaging checks are also available:
 
-GitHub Actions runs the test suite with the race detector for every pull request.
-Pushing any tag runs the tests, then builds Linux binaries for amd64, arm32
-(ARMv7), and arm64 with CGO disabled. The tag is embedded in `mystvpn version`.
+```sh
+python3 test/install_test.py
+python3 test/package_deb_test.py
+```
 
-After all builds succeed, CI publishes a GitHub release for the tag containing
-the installer script, archives, Debian packages, and their `.sha256` files. New releases remain drafts until all
-assets have been uploaded. The installer downloads from the latest release.
+### CI and releases
 
-Download the `mystvpn-linux-<architecture>` artifacts from the tagged workflow
-run. Each contains a `.tar.gz` archive with the executable's permissions
-preserved; extract it with `tar -xzf mystvpn-linux-<architecture>.tar.gz`. Each
-artifact also includes the matching `.deb` package and checksum. Debian package
-versions omit the tag's leading `v` and use `~` for prerelease separators.
+GitHub Actions runs Go tests with the race detector, shell checks, and installer
+and packaging tests for every pull request. Pushing any tag runs those checks,
+then builds Linux binaries for amd64, arm32 (ARMv7), and arm64 with CGO disabled.
+The tag is embedded in `mystvpn version`.
+
+After all builds succeed, CI publishes release archives, Debian packages, and
+their `.sha256` files. New releases remain drafts until all assets have been
+uploaded. The installer downloads packages from the latest release.
+
+Each tagged workflow also provides a `mystvpn-linux-<architecture>` artifact
+containing the archive, matching Debian package, and checksums. Extract an
+archive with `tar -xzf mystvpn-linux-<architecture>.tar.gz` to preserve the
+executable's permissions.
+
+Debian package versions omit the tag's leading `v` and use `~` for prerelease
+separators.
