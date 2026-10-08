@@ -21,7 +21,7 @@ access when needed. You do not need Go to use a release build.
 **1. Install the latest release.**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | bash
+curl -fsSL https://github.com/mysteriumnetwork/mysteriumvpncli/releases/latest/download/install.sh | bash
 ```
 
 **2. Sign in.**
@@ -245,7 +245,7 @@ If you used a custom directory, remove that old copy instead. Use
 Set `MYSTVPN_INSTALL_DIR` to an absolute path:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mysteriumnetwork/mysteriumvpncli/HEAD/install.sh | MYSTVPN_INSTALL_DIR="$HOME/.local/bin" bash
+curl -fsSL https://github.com/mysteriumnetwork/mysteriumvpncli/releases/latest/download/install.sh | MYSTVPN_INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
 This selects standalone installation even on apt-based systems. Add the
