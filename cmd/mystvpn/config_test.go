@@ -61,7 +61,7 @@ func TestCLIConfigRejectsInvalidUpdates(t *testing.T) {
 		{"set", "ip_type", "mobile"}, {"set", "ip_type", ""},
 		{"set", "unknown", "value"}, {"get", "unknown"}, {"unset", "unknown"},
 		{"get", "country", "extra"}, {"unset"}, {"unset", "country", "extra"},
-		{"path", "extra"}, {"unknown"}, {"--help"},
+		{"path", "extra"}, {"unknown"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			result := executeCLI(append([]string{"config"}, args...), config.Load(), nil)

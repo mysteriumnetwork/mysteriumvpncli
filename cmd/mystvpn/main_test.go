@@ -60,7 +60,7 @@ func TestRunHelpListsCommands(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0", exitCode)
 	}
-	for _, expected := range []string{"help", "version", "  auth\n", "countries --ip-type <residential|hosting>", "disconnect", "config [--profile <name>] [get [key] | effective | set <key> <value> | unset <key> | path]", "Settings: " + strings.Join(config.Keys(), ", "), "config profile [list | current", "connect [--profile"} {
+	for _, expected := range []string{"auth", "Sign in through browser approval.", "config", "View or change connection settings and profiles.", "countries", "List available countries", "connect", "Connect to a country", "refresh", "status", "disconnect", "logout", "help", "version", "Examples:", `mystvpn help <command>`, "-h, --help"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("help output does not contain %q: %q", expected, stdout.String())
 		}
@@ -92,7 +92,7 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 }
 
 func TestRunRejectsRootFlags(t *testing.T) {
-	for _, option := range []string{"--help", "-h", "--version", "--api-url", "--sentinel-url", "--pool", "--debug"} {
+	for _, option := range []string{"--version", "--api-url", "--sentinel-url", "--pool", "--debug"} {
 		t.Run(option, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 

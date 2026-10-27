@@ -24,19 +24,6 @@ var version = "dev"
 
 const countriesPerRow = 10
 
-var commands = []string{
-	"auth",
-	"config",
-	"countries",
-	"connect",
-	"refresh",
-	"status",
-	"disconnect",
-	"logout",
-	"help",
-	"version",
-}
-
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
@@ -50,9 +37,8 @@ func runWithConfig(args []string, stdin *os.File, stdout, stderr io.Writer, cfg 
 }
 
 func runWithDependencies(args []string, stdin *os.File, stdout, stderr io.Writer, cfg config.Config, tunnelRunner wireguard.TunnelRunner) int {
-	if len(args) == 0 {
-		writeUsage(stdout)
-		return 0
+	if path, requested := helpRequest(args); requested {
+		return runHelp(path, stdout, stderr)
 	}
 	if !isCommand(args[0]) {
 		fmt.Fprintf(stderr, "mystvpn: unknown command %q\n", args[0])
@@ -76,13 +62,6 @@ func runWithDependencies(args []string, stdin *os.File, stdout, stderr io.Writer
 		return runDisconnect(args[1:], cfg, stdout, stderr, tunnelRunner)
 	case "logout":
 		return runLogout(args[1:], cfg, stdout, stderr, tunnelRunner)
-	case "help":
-		if len(args) != 1 {
-			fmt.Fprintf(stderr, "mystvpn help: unexpected argument %q\n", args[1])
-			return 2
-		}
-		writeUsage(stdout)
-		return 0
 	case "version":
 		if len(args) != 1 {
 			fmt.Fprintf(stderr, "mystvpn version: unexpected argument %q\n", args[1])
@@ -104,9 +83,6 @@ func runConnect(args []string, cfg config.Config, stdout, stderr io.Writer, tunn
 	flags.Usage = func() {}
 
 	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprintln(stderr, `mystvpn connect: help flags are not supported; use "mystvpn help"`)
-		}
 		return 2
 	}
 	if flags.NArg() != 0 {
@@ -468,9 +444,6 @@ func runCountries(args []string, cfg config.Config, stdout, stderr io.Writer) in
 	flags.Usage = func() {}
 
 	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprintln(stderr, `mystvpn countries: help flags are not supported; use "mystvpn help"`)
-		}
 		return 2
 	}
 	if flags.NArg() != 0 {
@@ -664,40 +637,10 @@ func newAuthService(cfg config.Config) (*auth.Service, error) {
 }
 
 func isCommand(name string) bool {
-	for _, command := range commands {
-		if name == command {
+	for _, command := range helpTopics {
+		if name == command.name {
 			return true
 		}
 	}
 	return false
-}
-
-func writeUsage(output io.Writer) {
-	fmt.Fprintln(output, "mystvpn - Mysterium VPN CLI for Linux")
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Usage:")
-	fmt.Fprintln(output, "  mystvpn <command>")
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Commands:")
-	for _, command := range commands {
-		if command == "config" {
-			fmt.Fprintln(output, "  config [--profile <name>] [get [key] | effective | set <key> <value> | unset <key> | path]")
-			fmt.Fprintf(output, "    Settings: %s\n", strings.Join(config.Keys(), ", "))
-			fmt.Fprintln(output, "  config profile [list | current | create <name> | use <name> | delete <name>]")
-			continue
-		}
-		if command == "auth" {
-			fmt.Fprintln(output, "  auth")
-			continue
-		}
-		if command == "countries" {
-			fmt.Fprintln(output, "  countries --ip-type <residential|hosting>")
-			continue
-		}
-		if command == "connect" {
-			fmt.Fprintln(output, "  connect [--profile <name>] [--country <code>] [--ip-type <residential|hosting>]")
-			continue
-		}
-		fmt.Fprintf(output, "  %s\n", command)
-	}
 }

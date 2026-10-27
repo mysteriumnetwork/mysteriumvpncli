@@ -15,7 +15,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 	flags.Usage = func() {}
 	profileName := flags.String("profile", "", "profile to read or update (defaults to active)")
 	if err := flags.Parse(args); err != nil {
-		fmt.Fprintln(stderr, `mystvpn config: use "mystvpn help" for usage`)
+		fmt.Fprintln(stderr, `mystvpn config: use "mystvpn help config" for usage`)
 		return 2
 	}
 	args = flags.Args()
