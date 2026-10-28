@@ -67,6 +67,20 @@ func (d *Document) Saved(name string) (Overrides, error) {
 // Effective overlays the profile's known settings on current built-in defaults.
 // Unknown settings remain stored for compatibility but do not affect this version.
 func (d *Document) Effective(name string) (Settings, error) {
+	return d.effectiveSettings(name, Keys())
+}
+
+// EffectiveValue resolves and validates one setting independently. Discovery
+// commands can read their IP type without requiring a valid country or city.
+func (d *Document) EffectiveValue(name, key string) (any, error) {
+	settings, err := d.effectiveSettings(name, []string{key})
+	if err != nil {
+		return nil, err
+	}
+	return settings.Get(key)
+}
+
+func (d *Document) effectiveSettings(name string, keys []string) (Settings, error) {
 	if name == "" {
 		name = d.ActiveProfile
 	}
@@ -75,7 +89,7 @@ func (d *Document) Effective(name string) (Settings, error) {
 		return Settings{}, err
 	}
 	settings := DefaultSettings()
-	for _, key := range Keys() {
+	for _, key := range keys {
 		if value, ok := profile[key]; ok {
 			field, err := settingField(reflect.ValueOf(&settings).Elem(), key)
 			if err != nil {

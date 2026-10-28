@@ -78,7 +78,7 @@ func TestRunRefresh(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("runRefresh() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	if got, want := stdout.String(), "[SUCCESS] VPN connection refreshed.\nexit_ip: 2.3.4.5\ncountry: DE\ncity: hamburg\n"; got != want {
+	if got, want := stdout.String(), "[SUCCESS] VPN connection refreshed.\n\nIP address:  2.3.4.5\nIP type:     residential\nCountry:     DE (Germany)\nCity:        hamburg\n"; got != want {
 		t.Errorf("stdout = %q, want %q", got, want)
 	}
 	if got, want := strings.Join(runner.actions, ","), "down,up"; got != want {
@@ -151,7 +151,7 @@ func TestRunRefreshClassifiesTunnelTeardownFailures(t *testing.T) {
 				t.Errorf("tunnel actions = %q, want %q", got, test.wantActions)
 			}
 			if test.wantExit == 0 {
-				if stderr.Len() != 0 || !strings.Contains(stdout.String(), "[SUCCESS] VPN connection refreshed.\nexit_ip: 2.3.4.5") {
+				if stderr.Len() != 0 || !strings.Contains(stdout.String(), "[SUCCESS] VPN connection refreshed.\n\nIP address:  2.3.4.5") {
 					t.Errorf("stdout = %q, stderr = %q; want successful reconnect", stdout.String(), stderr.String())
 				}
 				updated := loadTestSession(t)
@@ -174,7 +174,7 @@ func TestRunStatus(t *testing.T) {
 
 		exitCode := runStatus(nil, &stdout, &stderr)
 
-		if exitCode != 0 || stdout.String() != "connected: no\n" || stderr.Len() != 0 {
+		if exitCode != 0 || stdout.String() != "Connected:  no\n" || stderr.Len() != 0 {
 			t.Errorf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
 		}
 	})
@@ -186,7 +186,7 @@ func TestRunStatus(t *testing.T) {
 
 		exitCode := runStatus(nil, &stdout, &stderr)
 
-		want := "connected: yes\nIP address: 1.2.3.4\ncountry: DE\ncity: berlin\n"
+		want := "Connected:   yes\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n"
 		if exitCode != 0 || stdout.String() != want || stderr.Len() != 0 {
 			t.Errorf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
 		}

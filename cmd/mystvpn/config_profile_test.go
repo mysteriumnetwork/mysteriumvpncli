@@ -94,7 +94,7 @@ func TestCLIConnectUsesBuiltInDefaultsWithoutConfig(t *testing.T) {
 	cfg.APIURL = server.APIURL()
 	runner := &endToEndTunnelRunner{}
 	assertAuthCommandSuccess(t, executeCLI([]string{"auth"}, cfg, runner))
-	assertCommandResult(t, executeCLI([]string{"connect"}, cfg, runner), 0, "[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
+	assertCommandResult(t, executeCLI([]string{"connect"}, cfg, runner), 0, "[SUCCESS] Connected to VPN.\n\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n", "")
 	requests := server.Snapshot().ConnectRequests
 	if len(requests) != 1 || requests[0].Country != "DE" || requests[0].IPType != "residential" {
 		t.Fatalf("requests = %+v, want built-in DE/residential defaults", requests)
@@ -119,14 +119,14 @@ func TestCLIProfileSwitchingAppliesToConnectAndRefresh(t *testing.T) {
 	assertCommandResult(t, execute("config", "--profile", "us-1", "set", "country", "US"), 0, "[SUCCESS] Saved country for profile \"us-1\". Changes apply on the next connect or refresh.\n", "")
 	assertCommandResult(t, execute("config", "--profile", "us-1", "set", "ip_type", "hosting"), 0, "[SUCCESS] Saved ip_type for profile \"us-1\". Changes apply on the next connect or refresh.\n", "")
 	assertAuthCommandSuccess(t, execute("auth"))
-	assertCommandResult(t, execute("connect"), 0, "[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
+	assertCommandResult(t, execute("connect"), 0, "[SUCCESS] Connected to VPN.\n\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n", "")
 	original := loadEndToEndSession(t)
 
 	assertCommandResult(t, execute("config", "profile", "use", "us-1"), 0, "[SUCCESS] Active profile: us-1. Changes apply on the next connect or refresh.\n", "")
 	if len(server.Snapshot().ConnectRequests) != 1 || strings.Join(runner.actions, ",") != "up" {
 		t.Fatal("profile selection changed the running VPN")
 	}
-	assertCommandResult(t, execute("refresh"), 0, "[SUCCESS] VPN connection refreshed.\nexit_ip: 2.3.4.5\ncountry: US\ncity: hamburg\n", "")
+	assertCommandResult(t, execute("refresh"), 0, "[SUCCESS] VPN connection refreshed.\n\nIP address:  2.3.4.5\nIP type:     hosting\nCountry:     US (United States)\nCity:        hamburg\n", "")
 	updated := loadEndToEndSession(t)
 	if updated.Country != "US" || updated.IPType != "hosting" || updated.PublicKey != original.PublicKey || updated.PrivateKey != original.PrivateKey || updated.ConfigPath != original.ConfigPath {
 		t.Fatal("refresh did not apply profile while preserving the tunnel keys and path")
@@ -165,7 +165,7 @@ func TestCLIProfileRefreshFailurePreservesRunningSession(t *testing.T) {
 	runner := &endToEndTunnelRunner{}
 	execute := func(args ...string) commandResult { return executeCLI(args, cfg, runner) }
 	assertAuthCommandSuccess(t, execute("auth"))
-	assertCommandResult(t, execute("connect", "--country", "DE", "--ip-type", "residential"), 0, "[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
+	assertCommandResult(t, execute("connect", "--country", "DE", "--ip-type", "residential"), 0, "[SUCCESS] Connected to VPN.\n\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n", "")
 	original := loadEndToEndSession(t)
 	assertCommandResult(t, execute("config", "profile", "create", "us-1"), 0, "[SUCCESS] Created profile \"us-1\". Select it with \"mystvpn config profile use us-1\".\n", "")
 	assertCommandResult(t, execute("config", "profile", "use", "us-1"), 0, "[SUCCESS] Active profile: us-1. Changes apply on the next connect or refresh.\n", "")

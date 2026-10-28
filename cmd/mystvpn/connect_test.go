@@ -47,11 +47,13 @@ func TestRunConnect(t *testing.T) {
 		}
 
 		writer.Header().Set("Content-Type", "application/json")
+		// Display the service's assigned IP type even when it differs from
+		// the request and the profile's default.
 		_, _ = writer.Write([]byte(`{
 			"id":"conn-abc123",
 			"wg_config":"[Interface]\nPrivateKey=%private_key%\nAddress=10.10.0.2/24\n\n[Peer]\nPublicKey=peer-value\nEndpoint=1.2.3.4:51820\nAllowedIPs=0.0.0.0/0\n",
 			"exit_ip":"1.2.3.4",
-			"ip_type":"residential",
+			"ip_type":"hosting",
 			"country":"DE",
 			"city":"berlin"
 		}`))
@@ -92,7 +94,7 @@ func TestRunConnect(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("runConnect() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	wantOutput := "[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n"
+	wantOutput := "[SUCCESS] Connected to VPN.\n\nIP address:  1.2.3.4\nIP type:     hosting\nCountry:     DE (Germany)\nCity:        berlin\n"
 	if stdout.String() != wantOutput {
 		t.Errorf("stdout = %q, want %q", stdout.String(), wantOutput)
 	}
@@ -114,7 +116,7 @@ func TestRunConnect(t *testing.T) {
 	if session.SessionID != "conn-abc123" || session.PublicKey != requestedPublicKey || session.PrivateKey == "" {
 		t.Errorf("session keys or ID are incomplete")
 	}
-	if session.Country != "DE" || session.IPType != "residential" || session.ExitIP != "1.2.3.4" || session.City != "berlin" {
+	if session.Country != "DE" || session.IPType != "hosting" || session.ExitIP != "1.2.3.4" || session.City != "berlin" {
 		t.Errorf("session metadata = %+v, want response metadata", session)
 	}
 	if session.ConfigPath != configPath || session.Timestamp.IsZero() {

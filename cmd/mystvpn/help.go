@@ -64,10 +64,10 @@ var helpTopics = []helpTopic{
 		},
 	},
 	{
-		name: "countries", usage: "countries --ip-type <residential|hosting>", summary: "List available countries for an IP address type.",
-		description: "Requires authentication. Use a country code from this list with connect.\nThe IP type must be supplied explicitly; saved profile settings are not used.",
-		flags:       "--ip-type <type>  Required: residential or hosting.",
-		examples:    "sudo mystvpn countries --ip-type residential\nsudo mystvpn countries --ip-type hosting",
+		name: "countries", usage: "countries [--ip-type <residential|hosting>]", summary: "List country codes and full names for an IP address type.",
+		description: fmt.Sprintf("Requires authentication. Uses the active profile's IP type when omitted\n(built-in default: %s). The heading shows the IP type being listed.\nAn explicit flag overrides it for this listing only. Use a country code from\nthe table with connect.", config.DefaultSettings().IPType),
+		flags:       "--ip-type <type>  Optional: residential or hosting (default: active profile).",
+		examples:    "sudo mystvpn countries\nsudo mystvpn countries --ip-type hosting",
 	},
 	{
 		name: "connect", usage: "connect [--profile <name>] [--country <code>] [--ip-type <residential|hosting>]", summary: "Connect to a country, replacing any active VPN connection.",
@@ -82,7 +82,7 @@ var helpTopics = []helpTopic{
 	},
 	{
 		name: "status", usage: "status", summary: "Show the locally saved VPN connection status.",
-		description: "Reads local session state without an API request or a live connectivity check.\nPrints connected: no when there is no saved session.",
+		description: "Reads local session state without an API request or a live connectivity check.\nShows the saved session's IP type, country code and full name, and city.\nReports disconnected when there is no saved session.",
 		examples:    "sudo mystvpn status",
 	},
 	{
@@ -166,7 +166,7 @@ func runHelp(path []string, stdout, stderr io.Writer) int {
 		summary:     "mystvpn - Mysterium VPN CLI for Linux",
 		description: "Sign in, choose a country, and manage your WireGuard VPN connection.\nRun VPN commands as root (or with sudo) using the same user that signed in.",
 		children:    helpTopics,
-		examples:    "sudo mystvpn auth\nsudo mystvpn countries --ip-type residential\nsudo mystvpn connect --country DE --ip-type residential\nsudo mystvpn status\nsudo mystvpn disconnect",
+		examples:    "sudo mystvpn auth\nsudo mystvpn countries\nsudo mystvpn connect --country DE\nsudo mystvpn status\nsudo mystvpn disconnect",
 	}
 	for _, name := range path {
 		topic = findHelpTopic(topic.children, name)

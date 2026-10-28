@@ -60,7 +60,7 @@ func TestRunHelpListsCommands(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0", exitCode)
 	}
-	for _, expected := range []string{"auth", "Sign in through browser approval.", "config", "View or change connection settings and profiles.", "countries", "List available countries", "connect", "Connect to a country", "refresh", "status", "disconnect", "logout", "help", "version", "Examples:", `mystvpn help <command>`, "-h, --help"} {
+	for _, expected := range []string{"auth", "Sign in through browser approval.", "config", "View or change connection settings and profiles.", "countries", "List country codes and full names", "connect", "Connect to a country", "refresh", "status", "disconnect", "logout", "help", "version", "Examples:", `mystvpn help <command>`, "-h, --help"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("help output does not contain %q: %q", expected, stdout.String())
 		}
@@ -352,7 +352,8 @@ func TestRunCountries(t *testing.T) {
 			if exitCode != 0 {
 				t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 			}
-			if got, want := stdout.String(), "[SUCCESS] Available countries (3):\n\nDE  MX  SE\n"; got != want {
+			want := fmt.Sprintf("[SUCCESS] Available countries (3) for IP type: %s\n\nCODE  COUNTRY    CODE  COUNTRY\nDE    Germany    SE    Sweden\nMX    Mexico\n", ipType)
+			if got := stdout.String(); got != want {
 				t.Errorf("stdout = %q, want %q", got, want)
 			}
 		})
@@ -360,12 +361,13 @@ func TestRunCountries(t *testing.T) {
 }
 
 func TestRunCountriesValidatesIPType(t *testing.T) {
+	configureTestHome(t)
 	tests := []struct {
 		name     string
 		args     []string
 		wantText string
 	}{
-		{name: "missing", args: []string{"countries"}, wantText: "--ip-type is required"},
+		{name: "explicit empty", args: []string{"countries", "--ip-type="}, wantText: `ip type must be "residential" or "hosting"`},
 		{name: "invalid", args: []string{"countries", "--ip-type", "mobile"}, wantText: `ip type must be "residential" or "hosting"`},
 	}
 
@@ -505,7 +507,7 @@ func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	if got, want := stdout.String(), "[SUCCESS] Available countries (1):\n\nCA\n"; got != want {
+	if got, want := stdout.String(), "[SUCCESS] Available countries (1) for IP type: residential\n\nCODE  COUNTRY\nCA    Canada\n"; got != want {
 		t.Errorf("stdout = %q, want %q", got, want)
 	}
 	if apiCalls.Load() != 2 || refreshCalls.Load() != 1 {
@@ -518,35 +520,6 @@ func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 	refreshToken, err := store.LoadRefreshToken()
 	if err != nil || refreshToken != "new-refresh" {
 		t.Errorf("stored refresh token = %q, error = %v", refreshToken, err)
-	}
-}
-
-func TestWriteCountriesUsesTenSortedColumns(t *testing.T) {
-	countries := []string{
-		"MX", "AR", "JP", "DE", "US", "BR", "CA", "FR", "GB", "AU",
-		"SE", "CH", "ES", "DK", "AT", "BE", "CL", "CO", "CZ", "EE",
-		"FI", "GR", "HR",
-	}
-	var output bytes.Buffer
-
-	writeCountries(&output, countries)
-
-	want := "[SUCCESS] Available countries (23):\n\n" +
-		"AR  AT  AU  BE  BR  CA  CH  CL  CO  CZ\n" +
-		"DE  DK  EE  ES  FI  FR  GB  GR  HR  JP\n" +
-		"MX  SE  US\n"
-	if output.String() != want {
-		t.Errorf("output = %q, want %q", output.String(), want)
-	}
-}
-
-func TestWriteCountriesHandlesEmptyList(t *testing.T) {
-	var output bytes.Buffer
-
-	writeCountries(&output, nil)
-
-	if got, want := output.String(), "[SUCCESS] Available countries (0):\n"; got != want {
-		t.Errorf("output = %q, want %q", got, want)
 	}
 }
 

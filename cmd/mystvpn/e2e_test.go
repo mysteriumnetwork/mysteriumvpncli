@@ -37,7 +37,7 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 		return result
 	}
 
-	assertCommandResult(t, execute("status"), 0, "connected: no\n", "")
+	assertCommandResult(t, execute("status"), 0, "Connected:  no\n", "")
 	assertAuthCommandSuccess(t, execute("auth"))
 
 	credentialsDirectory := filepath.Join(testConfigDirectory(t), "mystvpn", "credentials")
@@ -49,8 +49,8 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	}
 
 	server.RejectNextProxyRequest()
-	assertCommandResult(t, execute("countries", "--ip-type", "residential"), 0, "[SUCCESS] Available countries (3):\n\nCA  DE  SE\n", "")
-	assertCommandResult(t, execute("connect", "--country", "de", "--ip-type", "residential"), 0, "[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
+	assertCommandResult(t, execute("countries"), 0, "[SUCCESS] Available countries (3) for IP type: residential\n\nCODE  COUNTRY    CODE  COUNTRY\nCA    Canada     SE    Sweden\nDE    Germany\n", "")
+	assertCommandResult(t, execute("connect", "--country", "de", "--ip-type", "residential"), 0, "[SUCCESS] Connected to VPN.\n\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n", "")
 
 	connectedSession := loadEndToEndSession(t)
 	if connectedSession.PublicKey == "" || connectedSession.PrivateKey == "" {
@@ -60,9 +60,9 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	assertFileMode(t, filepath.Join(testConfigDirectory(t), "mystvpn", "wireguard", "keypair.json"), 0o600)
 	assertFileMode(t, connectedSession.ConfigPath, 0o600)
 
-	assertCommandResult(t, execute("status"), 0, "connected: yes\nIP address: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
-	assertCommandResult(t, execute("refresh"), 0, "[SUCCESS] VPN connection refreshed.\nexit_ip: 2.3.4.5\ncountry: DE\ncity: hamburg\n", "")
-	assertCommandResult(t, execute("status"), 0, "connected: yes\nIP address: 2.3.4.5\ncountry: DE\ncity: hamburg\n", "")
+	assertCommandResult(t, execute("status"), 0, "Connected:   yes\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n", "")
+	assertCommandResult(t, execute("refresh"), 0, "[SUCCESS] VPN connection refreshed.\n\nIP address:  2.3.4.5\nIP type:     residential\nCountry:     DE (Germany)\nCity:        hamburg\n", "")
+	assertCommandResult(t, execute("status"), 0, "Connected:   yes\nIP address:  2.3.4.5\nIP type:     residential\nCountry:     DE (Germany)\nCity:        hamburg\n", "")
 
 	refreshedSession := loadEndToEndSession(t)
 	if refreshedSession.PublicKey != connectedSession.PublicKey || refreshedSession.PrivateKey != connectedSession.PrivateKey {
@@ -76,7 +76,7 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	}
 
 	assertCommandResult(t, execute("disconnect"), 0, "[SUCCESS] Disconnected successfully.\n", "")
-	assertCommandResult(t, execute("status"), 0, "connected: no\n", "")
+	assertCommandResult(t, execute("status"), 0, "Connected:  no\n", "")
 
 	if _, err := os.Stat(refreshedSession.ConfigPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("WireGuard config Stat() error = %v, want removed", err)
@@ -148,7 +148,7 @@ func TestCLIConnectReplacesActiveSession(t *testing.T) {
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "residential"}, cfg, runner),
 		0,
-		"[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n",
+		"[SUCCESS] Connected to VPN.\n\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n",
 		"",
 	)
 	firstSession := loadEndToEndSession(t)
@@ -157,7 +157,7 @@ func TestCLIConnectReplacesActiveSession(t *testing.T) {
 		t,
 		executeCLI([]string{"connect", "--country", "CA", "--ip-type", "hosting"}, cfg, runner),
 		0,
-		"[SUCCESS] Connected to VPN.\nexit_ip: 2.3.4.5\ncountry: CA\ncity: hamburg\n",
+		"[SUCCESS] Connected to VPN.\n\nIP address:  2.3.4.5\nIP type:     hosting\nCountry:     CA (Canada)\nCity:        hamburg\n",
 		"",
 	)
 	secondSession := loadEndToEndSession(t)
@@ -199,13 +199,13 @@ func TestCLILogoutDisconnectsActiveSession(t *testing.T) {
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "residential"}, cfg, runner),
 		0,
-		"[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n",
+		"[SUCCESS] Connected to VPN.\n\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n",
 		"",
 	)
 	session := loadEndToEndSession(t)
 
 	assertCommandResult(t, executeCLI([]string{"logout"}, cfg, runner), 0, "[SUCCESS] Logout successful.\n", "")
-	assertCommandResult(t, executeCLI([]string{"status"}, cfg, runner), 0, "connected: no\n", "")
+	assertCommandResult(t, executeCLI([]string{"status"}, cfg, runner), 0, "Connected:  no\n", "")
 	if got, want := strings.Join(runner.actions, ","), "up,down"; got != want {
 		t.Errorf("WireGuard actions = %q, want %q", got, want)
 	}
@@ -278,7 +278,7 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "hosting"}, cfg, runner),
 		0,
-		"[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n",
+		"[SUCCESS] Connected to VPN.\n\nIP address:  1.2.3.4\nIP type:     hosting\nCountry:     DE (Germany)\nCity:        berlin\n",
 		"",
 	)
 	session := loadEndToEndSession(t)

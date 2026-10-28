@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -21,8 +20,6 @@ import (
 )
 
 var version = "dev"
-
-const countriesPerRow = 10
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -290,9 +287,8 @@ func establishConnection(command string, cfg config.Config, stdout, stderr io.Wr
 	} else {
 		writeSuccess(stdout, "Connected to VPN.")
 	}
-	fmt.Fprintf(stdout, "exit_ip: %s\n", session.ExitIP)
-	fmt.Fprintf(stdout, "country: %s\n", session.Country)
-	fmt.Fprintf(stdout, "city: %s\n", session.City)
+	fmt.Fprintln(stdout)
+	writeConnectionDetails(stdout, session, false)
 	return 0
 }
 
@@ -320,7 +316,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	session, err := sessionStore.Load()
 	if errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(stdout, "connected: no")
+		fmt.Fprintln(stdout, "Connected:  no")
 		return 0
 	}
 	if err != nil {
@@ -328,10 +324,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	fmt.Fprintln(stdout, "connected: yes")
-	fmt.Fprintf(stdout, "IP address: %s\n", session.ExitIP)
-	fmt.Fprintf(stdout, "country: %s\n", session.Country)
-	fmt.Fprintf(stdout, "city: %s\n", session.City)
+	writeConnectionDetails(stdout, session, true)
 	return 0
 }
 
@@ -448,9 +441,25 @@ func runCountries(args []string, cfg config.Config, stdout, stderr io.Writer) in
 		writeError(stderr, "mystvpn countries: unexpected argument %q\n", flags.Arg(0))
 		return 2
 	}
-	if *ipTypeValue == "" {
-		writeError(stderr, "mystvpn countries: --ip-type is required")
-		return 2
+	provided := false
+	flags.Visit(func(f *flag.Flag) { provided = provided || f.Name == "ip-type" })
+	if !provided {
+		store, err := config.NewDefaultStore()
+		if err != nil {
+			writeError(stderr, "mystvpn countries: %v", err)
+			return 1
+		}
+		document, err := store.LoadDocument()
+		if err != nil {
+			writeError(stderr, "mystvpn countries: %v", err)
+			return 1
+		}
+		value, err := document.EffectiveValue("", "ip_type")
+		if err != nil {
+			writeError(stderr, "mystvpn countries: %v", err)
+			return 2
+		}
+		*ipTypeValue = value.(string)
 	}
 	ipType, err := proxy.ParseIPType(*ipTypeValue)
 	if err != nil {
@@ -478,31 +487,8 @@ func runCountries(args []string, cfg config.Config, stdout, stderr io.Writer) in
 		writeCountriesError(stderr, err)
 		return 1
 	}
-	writeCountries(stdout, connectionConfig.Countries)
+	writeCountries(stdout, connectionConfig.Countries, ipType)
 	return 0
-}
-
-func writeCountries(output io.Writer, countries []string) {
-	sortedCountries := append([]string(nil), countries...)
-	sort.Strings(sortedCountries)
-
-	writeSuccess(output, "Available countries (%d):", len(sortedCountries))
-	if len(sortedCountries) == 0 {
-		return
-	}
-	fmt.Fprintln(output)
-
-	for index, country := range sortedCountries {
-		if index > 0 {
-			if index%countriesPerRow == 0 {
-				fmt.Fprintln(output)
-			} else {
-				fmt.Fprint(output, "  ")
-			}
-		}
-		fmt.Fprint(output, country)
-	}
-	fmt.Fprintln(output)
 }
 
 func writeCountriesError(output io.Writer, err error) {

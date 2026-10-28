@@ -57,12 +57,12 @@ func TestCommandHelpExplainsBehavior(t *testing.T) {
 		want []string
 	}{
 		{"connect", []string{"--profile <name>", "--country <code>", "--ip-type <type>", "residential or hosting", "case-insensitive", "built-in default: " + config.DefaultSettings().Country, "override the profile", "Requires authentication"}},
-		{"countries", []string{"Required: residential or hosting", "saved profile settings are not used", "Requires authentication"}},
+		{"countries", []string{"Optional: residential or hosting", "active profile's IP type", "heading shows the IP type", "Requires authentication"}},
 		{"config", []string{"get", "effective", "set", "unset", "path", "profile", "saved overrides as JSON", "Place this flag before", "country", "ip_type"}},
 		{"config get", []string{"get [key]", "built-in", "--profile"}},
 		{"config profile", []string{"list", "current", "create", "use", "delete", "asterisk (*)", "--profile is not supported"}},
 		{"config profile create", []string{"create <name>", "without selecting it", "64 characters"}},
-		{"status", []string{"without an API request or a live connectivity check", "connected: no"}},
+		{"status", []string{"without an API request or a live connectivity check", "no saved session"}},
 		{"refresh", []string{"Requires an active session", "active profile's current country and IP type"}},
 	}
 	for _, test := range tests {
