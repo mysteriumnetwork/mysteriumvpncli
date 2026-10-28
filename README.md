@@ -7,6 +7,7 @@ from the terminal.
 - [Quick start](#quick-start)
 - [Installation](#installation)
 - [Everyday use](#everyday-use)
+- [Configuration and profiles](#configuration-and-profiles)
 - [Updating](#updating)
 - [Advanced setup](#advanced-setup)
 - [Security](#security)
@@ -116,12 +117,48 @@ Debian filenames follow `mystvpn_<version>_<architecture>.deb`.
 | `mystvpn help` | Show available commands. Running `mystvpn` alone also shows help. |
 | `mystvpn version` | Show the installed version. |
 | `sudo mystvpn auth` | Sign in through browser approval. |
+| `sudo mystvpn config profile list` | List profiles, marking the active selection with `*`. |
+| `sudo mystvpn config profile create us-1` | Create a profile using built-in defaults. |
+| `sudo mystvpn config profile use us-1` | Select the profile for the next connect or refresh. |
+| `sudo mystvpn config profile current` | Print the selected profile's name. |
+| `sudo mystvpn config profile delete us-1` | Delete an inactive profile. |
+| `sudo mystvpn config` | Print the selected profile's saved overrides as JSON. |
+| `sudo mystvpn config effective` | Print its effective settings, including built-in defaults. |
+| `sudo mystvpn config --profile us-1 set country US` | Save a setting for a specific profile. |
+| `sudo mystvpn config --profile us-1 get country` | Read a setting for a specific profile. |
+| `sudo mystvpn config unset country` | Remove a saved override. |
+| `sudo mystvpn config path` | Print the config file location. |
 | `sudo mystvpn countries --ip-type residential` | List available country codes for an IP type. |
 | `sudo mystvpn connect --country DE --ip-type residential` | Connect to a country, replacing any active connection. |
 | `sudo mystvpn status` | Show the locally saved connection status. |
-| `sudo mystvpn refresh` | Reconnect with the current country and IP type. |
+| `sudo mystvpn refresh` | Reconnect using the selected profile and saved WireGuard keypair. |
 | `sudo mystvpn disconnect` | Disconnect the VPN. |
 | `sudo mystvpn logout` | Disconnect and remove stored authentication tokens. |
+
+### Configuration and profiles
+
+Connections default to Germany (`DE`) with `residential` IPs. After signing
+in, run `sudo mystvpn connect` to use these defaults.
+
+Create and select a reusable preset:
+
+```sh
+sudo mystvpn config profile create us-1
+sudo mystvpn config --profile us-1 set country US
+sudo mystvpn config --profile us-1 set ip_type hosting
+sudo mystvpn config profile use us-1
+```
+
+The selection persists across runs. Apply it with `sudo mystvpn connect`, or
+`sudo mystvpn refresh` if already connected. Selecting a profile alone leaves
+the running connection unchanged.
+
+Use `--profile <name>` before `set` or `get` to target a specific profile;
+omit it to use the selected profile. `config unset <key>` restores a setting's
+default. `config` shows saved settings, and `config effective` includes defaults.
+
+For a single connection, `connect --profile us-1` uses that preset without
+changing the selection. Flags such as `--country CA` override its settings.
 
 ### Choose or change a location
 
@@ -133,8 +170,8 @@ sudo mystvpn countries --ip-type hosting
 ```
 
 Country codes are listed alphabetically, with up to ten codes per line.
-To connect, provide both a two-letter country code and an IP type
-(`residential` or `hosting`):
+To connect, provide a two-letter country code and an IP type
+(`residential` or `hosting`) through saved defaults or explicit flags:
 
 ```sh
 sudo mystvpn connect --country DE --ip-type residential
@@ -170,7 +207,7 @@ city: berlin
 Status reads local state without making an API request; it is not a live
 connectivity check. With no active session, it prints `connected: no`.
 
-To reconnect using the saved country and IP type:
+To reconnect using the selected profile:
 
 ```sh
 sudo mystvpn refresh

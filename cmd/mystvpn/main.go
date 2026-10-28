@@ -26,6 +26,7 @@ const countriesPerRow = 10
 
 var commands = []string{
 	"auth",
+	"config",
 	"countries",
 	"connect",
 	"refresh",
@@ -59,6 +60,8 @@ func runWithDependencies(args []string, stdin *os.File, stdout, stderr io.Writer
 	}
 
 	switch args[0] {
+	case "config":
+		return runConfig(args[1:], stdout, stderr)
 	case "auth":
 		return runAuth(args[1:], cfg, stdout, stderr)
 	case "countries":
@@ -97,6 +100,7 @@ func runConnect(args []string, cfg config.Config, stdout, stderr io.Writer, tunn
 	flags.SetOutput(stderr)
 	countryValue := flags.String("country", "", "country code")
 	ipTypeValue := flags.String("ip-type", "", "IP address type")
+	profileName := flags.String("profile", "", "profile to use for this connection (defaults to active)")
 	flags.Usage = func() {}
 
 	if err := flags.Parse(args); err != nil {
@@ -108,6 +112,31 @@ func runConnect(args []string, cfg config.Config, stdout, stderr io.Writer, tunn
 	if flags.NArg() != 0 {
 		fmt.Fprintf(stderr, "mystvpn connect: unexpected argument %q\n", flags.Arg(0))
 		return 2
+	}
+	store, err := config.NewDefaultStore()
+	if err != nil {
+		fmt.Fprintf(stderr, "mystvpn connect: %v\n", err)
+		return 1
+	}
+	document, err := store.LoadDocument()
+	if err != nil {
+		fmt.Fprintf(stderr, "mystvpn connect: %v\n", err)
+		return 1
+	}
+	settings, err := document.Effective(*profileName)
+	if err != nil {
+		fmt.Fprintf(stderr, "mystvpn connect: %v\n", err)
+		return 2
+	}
+	// Only omitted flags inherit defaults; an explicit empty value still fails
+	// validation instead of silently falling back to the saved setting.
+	provided := make(map[string]bool)
+	flags.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	if !provided["country"] {
+		*countryValue = settings.Country
+	}
+	if !provided["ip-type"] {
+		*ipTypeValue = settings.IPType
 	}
 	if strings.TrimSpace(*countryValue) == "" {
 		fmt.Fprintln(stderr, "mystvpn connect: --country is required")
@@ -180,14 +209,14 @@ func runRefresh(args []string, cfg config.Config, stdout, stderr io.Writer, tunn
 		fmt.Fprintln(stderr, "mystvpn refresh: could not load local session state")
 		return 1
 	}
-	country, err := proxy.ParseCountry(session.Country)
+	configStore, err := config.NewDefaultStore()
 	if err != nil {
-		fmt.Fprintln(stderr, "mystvpn refresh: invalid local session state")
+		fmt.Fprintf(stderr, "mystvpn refresh: %v\n", err)
 		return 1
 	}
-	ipType, err := proxy.ParseIPType(session.IPType)
+	settings, err := configStore.Load()
 	if err != nil {
-		fmt.Fprintln(stderr, "mystvpn refresh: invalid local session state")
+		fmt.Fprintf(stderr, "mystvpn refresh: %v\n", err)
 		return 1
 	}
 	if !validateActiveConnection("refresh", stderr, session) {
@@ -195,7 +224,7 @@ func runRefresh(args []string, cfg config.Config, stdout, stderr io.Writer, tunn
 	}
 
 	keyPair := wireguard.KeyPair{PublicKey: session.PublicKey, PrivateKey: session.PrivateKey}
-	return establishConnection("refresh", cfg, stdout, stderr, tunnelRunner, sessionStore, &session, keyPair, country, ipType)
+	return establishConnection("refresh", cfg, stdout, stderr, tunnelRunner, sessionStore, &session, keyPair, settings.Country, proxy.IPType(settings.IPType))
 }
 
 func establishConnection(command string, cfg config.Config, stdout, stderr io.Writer, tunnelRunner wireguard.TunnelRunner, sessionStore *state.Store, activeSession *state.Session, keyPair wireguard.KeyPair, country string, ipType proxy.IPType) int {
@@ -651,6 +680,12 @@ func writeUsage(output io.Writer) {
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Commands:")
 	for _, command := range commands {
+		if command == "config" {
+			fmt.Fprintln(output, "  config [--profile <name>] [get [key] | effective | set <key> <value> | unset <key> | path]")
+			fmt.Fprintf(output, "    Settings: %s\n", strings.Join(config.Keys(), ", "))
+			fmt.Fprintln(output, "  config profile [list | current | create <name> | use <name> | delete <name>]")
+			continue
+		}
 		if command == "auth" {
 			fmt.Fprintln(output, "  auth")
 			continue
@@ -660,7 +695,7 @@ func writeUsage(output io.Writer) {
 			continue
 		}
 		if command == "connect" {
-			fmt.Fprintln(output, "  connect --country <code> --ip-type <residential|hosting>")
+			fmt.Fprintln(output, "  connect [--profile <name>] [--country <code>] [--ip-type <residential|hosting>]")
 			continue
 		}
 		fmt.Fprintf(output, "  %s\n", command)

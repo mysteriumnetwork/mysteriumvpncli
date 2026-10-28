@@ -126,14 +126,15 @@ func TestRunConnect(t *testing.T) {
 }
 
 func TestRunConnectValidatesFlags(t *testing.T) {
+	configureTestHome(t)
 	tests := []struct {
 		name     string
 		args     []string
 		wantText string
 	}{
-		{name: "missing country", args: []string{"--ip-type", "residential"}, wantText: "--country is required"},
+		{name: "empty country", args: []string{"--country=", "--ip-type", "residential"}, wantText: "--country is required"},
 		{name: "invalid country", args: []string{"--country", "Germany", "--ip-type", "residential"}, wantText: "country must be a two-letter code"},
-		{name: "missing ip type", args: []string{"--country", "DE"}, wantText: "--ip-type is required"},
+		{name: "empty ip type", args: []string{"--country", "DE", "--ip-type="}, wantText: "--ip-type is required"},
 		{name: "invalid ip type", args: []string{"--country", "DE", "--ip-type", "mobile"}, wantText: `ip type must be "residential" or "hosting"`},
 	}
 

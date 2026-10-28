@@ -60,10 +60,13 @@ func TestRunHelpListsCommands(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0", exitCode)
 	}
-	for _, expected := range []string{"help", "version", "  auth\n", "countries --ip-type <residential|hosting>", "disconnect"} {
+	for _, expected := range []string{"help", "version", "  auth\n", "countries --ip-type <residential|hosting>", "disconnect", "config [--profile <name>] [get [key] | effective | set <key> <value> | unset <key> | path]", "Settings: " + strings.Join(config.Keys(), ", "), "config profile [list | current", "connect [--profile"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("help output does not contain %q: %q", expected, stdout.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "\n  profile ") {
+		t.Errorf("help advertises a top-level profile command: %q", stdout.String())
 	}
 	for _, hidden := range []string{"api-url", "sentinel", "pool", "debug"} {
 		if strings.Contains(strings.ToLower(stdout.String()), hidden) {
