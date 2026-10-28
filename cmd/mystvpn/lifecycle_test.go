@@ -78,7 +78,7 @@ func TestRunRefresh(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("runRefresh() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	if got, want := stdout.String(), "exit_ip: 2.3.4.5\ncountry: DE\ncity: hamburg\n"; got != want {
+	if got, want := stdout.String(), "[SUCCESS] VPN connection refreshed.\nexit_ip: 2.3.4.5\ncountry: DE\ncity: hamburg\n"; got != want {
 		t.Errorf("stdout = %q, want %q", got, want)
 	}
 	if got, want := strings.Join(runner.actions, ","), "down,up"; got != want {
@@ -151,7 +151,7 @@ func TestRunRefreshClassifiesTunnelTeardownFailures(t *testing.T) {
 				t.Errorf("tunnel actions = %q, want %q", got, test.wantActions)
 			}
 			if test.wantExit == 0 {
-				if stderr.Len() != 0 || !strings.Contains(stdout.String(), "exit_ip: 2.3.4.5") {
+				if stderr.Len() != 0 || !strings.Contains(stdout.String(), "[SUCCESS] VPN connection refreshed.\nexit_ip: 2.3.4.5") {
 					t.Errorf("stdout = %q, stderr = %q; want successful reconnect", stdout.String(), stderr.String())
 				}
 				updated := loadTestSession(t)
@@ -227,7 +227,7 @@ func TestRunDisconnect(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("runDisconnect() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	if stdout.String() != "Disconnected successfully\n" {
+	if stdout.String() != "[SUCCESS] Disconnected successfully.\n" {
 		t.Errorf("stdout = %q", stdout.String())
 	}
 	if got := strings.Join(runner.actions, ","); got != "down" {
@@ -256,7 +256,8 @@ func TestLifecycleCommandsWithoutSession(t *testing.T) {
 			} else {
 				exitCode = runDisconnect(nil, config.Load(), &stdout, &stderr, &recordingTunnelRunner{})
 			}
-			if exitCode == 0 || stderr.String() != "no active session\n" {
+			want := "[ERROR] mystvpn " + command + ": no active session; run \"mystvpn connect\" first\n"
+			if exitCode == 0 || stderr.String() != want {
 				t.Errorf("exit=%d stderr=%q", exitCode, stderr.String())
 			}
 		})
@@ -278,7 +279,7 @@ func TestDisconnectHTTPFailurePreservesLocalSession(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	exitCode := runDisconnect(nil, cfg, &stdout, &stderr, runner)
 
-	if exitCode != 1 || stderr.String() != "mystvpn disconnect: HTTP status 403\n" {
+	if exitCode != 1 || stderr.String() != "[ERROR] mystvpn disconnect: HTTP status 403 (Forbidden): access denied; check your VPN account permissions and subscription\n" {
 		t.Errorf("exit=%d stderr=%q", exitCode, stderr.String())
 	}
 	if len(runner.actions) != 0 {

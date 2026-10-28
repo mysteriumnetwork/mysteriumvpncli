@@ -14,7 +14,7 @@ import (
 
 func TestCLIInvalidSavedTargetingIsRejectedAndRepairable(t *testing.T) {
 	for _, key := range []string{"country", "ip_type"} {
-		for _, value := range []string{`""`, `null`, `42`} {
+		for _, value := range []string{`""`, `null`, `42`, `"df"`} {
 			t.Run(key+"="+value, func(t *testing.T) {
 				configureTestHome(t)
 				original := saveTestSession(t)
@@ -39,7 +39,8 @@ func TestCLIInvalidSavedTargetingIsRejectedAndRepairable(t *testing.T) {
 				if result := executeCLI([]string{"config"}, cfg, runner); result.exitCode != 0 || !strings.Contains(result.stdout, key) {
 					t.Fatalf("could not inspect invalid saved settings: %+v", result)
 				}
-				assertCommandResult(t, executeCLI([]string{"config", "unset", key}, cfg, runner), 0, "", "")
+				want := fmt.Sprintf("[SUCCESS] Reset %s to its built-in default for profile \"default\". Changes apply on the next connect or refresh.\n", key)
+				assertCommandResult(t, executeCLI([]string{"config", "unset", key}, cfg, runner), 0, want, "")
 				if settings, err := store.Load(); err != nil || !reflect.DeepEqual(settings, config.DefaultSettings()) {
 					t.Fatalf("unset did not restore built-in defaults: %+v, %v", settings, err)
 				}
@@ -67,12 +68,12 @@ func TestCLIProfilesCanBeRepairedIndependently(t *testing.T) {
 	}`)
 	execute := func(args ...string) commandResult { return executeCLI(args, config.Load(), nil) }
 	assertCommandResult(t, execute("config", "profile", "current"), 0, "broken\n", "")
-	assertCommandResult(t, execute("config", "profile", "use", "default"), 0, "Active profile: default\n", "")
+	assertCommandResult(t, execute("config", "profile", "use", "default"), 0, "[SUCCESS] Active profile: default. Changes apply on the next connect or refresh.\n", "")
 	if settings, err := store.Load(); err != nil || !reflect.DeepEqual(settings, config.DefaultSettings()) {
 		t.Fatalf("invalid inactive profile blocked healthy selection: %+v, %v", settings, err)
 	}
 	// Fix one of two bad values without losing the other values along the way.
-	assertCommandResult(t, execute("config", "--profile", "broken", "set", "country", "US"), 0, "", "")
+	assertCommandResult(t, execute("config", "--profile", "broken", "set", "country", "US"), 0, "[SUCCESS] Saved country for profile \"broken\". Changes apply on the next connect or refresh.\n", "")
 	document, err := store.LoadDocument()
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +81,7 @@ func TestCLIProfilesCanBeRepairedIndependently(t *testing.T) {
 	if string(document.Profiles["broken"]["country"]) != `"US"` || string(document.Profiles["broken"]["ip_type"]) != "null" || string(document.Profiles["broken"]["future"]) != "123" {
 		t.Fatal("partial repair changed unrelated properties")
 	}
-	assertCommandResult(t, execute("config", "--profile", "broken", "unset", "ip_type"), 0, "", "")
+	assertCommandResult(t, execute("config", "--profile", "broken", "unset", "ip_type"), 0, "[SUCCESS] Reset ip_type to its built-in default for profile \"broken\". Changes apply on the next connect or refresh.\n", "")
 	assertCommandResult(t, execute("config", "--profile", "broken", "get", "country"), 0, "US\n", "")
 	assertCommandResult(t, execute("config", "--profile", "broken", "get", "ip_type"), 0, "residential\n", "")
 
@@ -95,8 +96,8 @@ func TestCLIProfilesCanBeRepairedIndependently(t *testing.T) {
 	if after, err := os.ReadFile(store.Path()); err != nil || !bytes.Equal(before, after) {
 		t.Fatal("failed selection changed persisted configuration")
 	}
-	assertCommandResult(t, execute("config", "profile", "delete", "bad-ip"), 0, "", "")
-	assertCommandResult(t, execute("config", "profile", "use", "broken"), 0, "Active profile: broken\n", "")
+	assertCommandResult(t, execute("config", "profile", "delete", "bad-ip"), 0, "[SUCCESS] Deleted profile \"bad-ip\".\n", "")
+	assertCommandResult(t, execute("config", "profile", "use", "broken"), 0, "[SUCCESS] Active profile: broken. Changes apply on the next connect or refresh.\n", "")
 }
 
 func writeTestConfigJSON(t *testing.T, body string) *config.Store {

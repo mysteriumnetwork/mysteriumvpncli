@@ -15,17 +15,17 @@ func runConfigProfile(args []string, stdout, stderr io.Writer) int {
 	valid := ((action == "list" || action == "current") && len(args) <= 1) ||
 		((action == "create" || action == "use" || action == "delete") && len(args) == 2)
 	if !valid {
-		fmt.Fprintln(stderr, "mystvpn config profile: usage: config profile [list | current | create <name> | use <name> | delete <name>]")
+		writeError(stderr, "mystvpn config profile: usage: config profile [list | current | create <name> | use <name> | delete <name>]")
 		return 2
 	}
 	store, err := config.NewDefaultStore()
 	if err != nil {
-		fmt.Fprintf(stderr, "mystvpn config profile: %v\n", err)
+		writeError(stderr, "mystvpn config profile: %v\n", err)
 		return 1
 	}
 	document, err := store.LoadDocument()
 	if err != nil {
-		fmt.Fprintf(stderr, "mystvpn config profile: %v\n", err)
+		writeError(stderr, "mystvpn config profile: %v\n", err)
 		return 1
 	}
 	switch action {
@@ -49,15 +49,20 @@ func runConfigProfile(args []string, stdout, stderr io.Writer) int {
 		err = document.Delete(args[1])
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "mystvpn config profile: %v\n", err)
+		writeError(stderr, "mystvpn config profile: %v\n", err)
 		return 2
 	}
 	if err := store.SaveDocument(document); err != nil {
-		fmt.Fprintf(stderr, "mystvpn config profile: %v\n", err)
+		writeError(stderr, "mystvpn config profile: %v\n", err)
 		return 1
 	}
-	if action == "use" {
-		fmt.Fprintf(stdout, "Active profile: %s\n", document.ActiveProfile)
+	switch action {
+	case "use":
+		writeSuccess(stdout, "Active profile: %s. Changes apply on the next connect or refresh.", document.ActiveProfile)
+	case "create":
+		writeSuccess(stdout, "Created profile %q. Select it with \"mystvpn config profile use %s\".", args[1], args[1])
+	case "delete":
+		writeSuccess(stdout, "Deleted profile %q.", args[1])
 	}
 	return 0
 }

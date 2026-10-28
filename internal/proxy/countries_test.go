@@ -35,10 +35,20 @@ func TestParseCountry(t *testing.T) {
 	}{
 		{value: "de", want: "DE", valid: true},
 		{value: " CA ", want: "CA", valid: true},
+		{value: "AD", want: "AD", valid: true},
+		{value: "ZW", want: "ZW", valid: true},
+		{value: "GB", want: "GB", valid: true},
+		{value: "AX", want: "AX", valid: true},
 		{value: "", valid: false},
 		{value: "D", valid: false},
 		{value: "DEU", valid: false},
 		{value: "D1", valid: false},
+		{value: "df", valid: false},
+		{value: "DF", valid: false},
+		{value: "ZZ", valid: false},
+		{value: "UK", valid: false},
+		{value: "EU", valid: false},
+		{value: "SU", valid: false},
 	}
 
 	for _, test := range tests {

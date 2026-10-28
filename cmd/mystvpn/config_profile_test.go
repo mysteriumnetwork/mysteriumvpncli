@@ -25,13 +25,13 @@ func TestCLIProfilesReadWrite(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("reading implicit default profile created a config file")
 	}
-	assertCommandResult(t, execute("config", "set", "country", "DE"), 0, "", "")
-	assertCommandResult(t, execute("config", "profile", "create", "us-1"), 0, "", "")
-	assertCommandResult(t, execute("config", "--profile", "us-1", "set", "country", "US"), 0, "", "")
-	assertCommandResult(t, execute("config", "--profile", "us-1", "set", "ip_type", "hosting"), 0, "", "")
+	assertCommandResult(t, execute("config", "set", "country", "DE"), 0, "[SUCCESS] Saved country for profile \"default\". Changes apply on the next connect or refresh.\n", "")
+	assertCommandResult(t, execute("config", "profile", "create", "us-1"), 0, "[SUCCESS] Created profile \"us-1\". Select it with \"mystvpn config profile use us-1\".\n", "")
+	assertCommandResult(t, execute("config", "--profile", "us-1", "set", "country", "US"), 0, "[SUCCESS] Saved country for profile \"us-1\". Changes apply on the next connect or refresh.\n", "")
+	assertCommandResult(t, execute("config", "--profile", "us-1", "set", "ip_type", "hosting"), 0, "[SUCCESS] Saved ip_type for profile \"us-1\". Changes apply on the next connect or refresh.\n", "")
 	assertCommandResult(t, execute("config", "profile", "current"), 0, "default\n", "")
 	assertCommandResult(t, execute("config", "profile", "list"), 0, "* default\n  us-1\n", "")
-	assertCommandResult(t, execute("config", "profile", "use", "us-1"), 0, "Active profile: us-1\n", "")
+	assertCommandResult(t, execute("config", "profile", "use", "us-1"), 0, "[SUCCESS] Active profile: us-1. Changes apply on the next connect or refresh.\n", "")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -44,8 +44,8 @@ func TestCLIProfilesReadWrite(t *testing.T) {
 	assertCommandResult(t, execute("config", "profile", "list"), 0, "  default\n* us-1\n", "")
 	assertCommandResult(t, execute("config", "get", "country"), 0, "US\n", "")
 	assertCommandResult(t, execute("config", "--profile", "default", "get", "country"), 0, "DE\n", "")
-	assertCommandResult(t, execute("config", "profile", "use", "default"), 0, "Active profile: default\n", "")
-	assertCommandResult(t, execute("config", "profile", "delete", "us-1"), 0, "", "")
+	assertCommandResult(t, execute("config", "profile", "use", "default"), 0, "[SUCCESS] Active profile: default. Changes apply on the next connect or refresh.\n", "")
+	assertCommandResult(t, execute("config", "profile", "delete", "us-1"), 0, "[SUCCESS] Deleted profile \"us-1\".\n", "")
 	assertCommandResult(t, execute("config", "profile"), 0, "* default\n", "")
 	assertFileMode(t, path, 0o600)
 }
@@ -94,7 +94,7 @@ func TestCLIConnectUsesBuiltInDefaultsWithoutConfig(t *testing.T) {
 	cfg.APIURL = server.APIURL()
 	runner := &endToEndTunnelRunner{}
 	assertAuthCommandSuccess(t, executeCLI([]string{"auth"}, cfg, runner))
-	assertCommandResult(t, executeCLI([]string{"connect"}, cfg, runner), 0, "exit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
+	assertCommandResult(t, executeCLI([]string{"connect"}, cfg, runner), 0, "[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
 	requests := server.Snapshot().ConnectRequests
 	if len(requests) != 1 || requests[0].Country != "DE" || requests[0].IPType != "residential" {
 		t.Fatalf("requests = %+v, want built-in DE/residential defaults", requests)
@@ -113,20 +113,20 @@ func TestCLIProfileSwitchingAppliesToConnectAndRefresh(t *testing.T) {
 	cfg.APIURL = server.APIURL()
 	runner := &endToEndTunnelRunner{}
 	execute := func(args ...string) commandResult { return executeCLI(args, cfg, runner) }
-	assertCommandResult(t, execute("config", "set", "country", "DE"), 0, "", "")
-	assertCommandResult(t, execute("config", "set", "ip_type", "residential"), 0, "", "")
-	assertCommandResult(t, execute("config", "profile", "create", "us-1"), 0, "", "")
-	assertCommandResult(t, execute("config", "--profile", "us-1", "set", "country", "US"), 0, "", "")
-	assertCommandResult(t, execute("config", "--profile", "us-1", "set", "ip_type", "hosting"), 0, "", "")
+	assertCommandResult(t, execute("config", "set", "country", "DE"), 0, "[SUCCESS] Saved country for profile \"default\". Changes apply on the next connect or refresh.\n", "")
+	assertCommandResult(t, execute("config", "set", "ip_type", "residential"), 0, "[SUCCESS] Saved ip_type for profile \"default\". Changes apply on the next connect or refresh.\n", "")
+	assertCommandResult(t, execute("config", "profile", "create", "us-1"), 0, "[SUCCESS] Created profile \"us-1\". Select it with \"mystvpn config profile use us-1\".\n", "")
+	assertCommandResult(t, execute("config", "--profile", "us-1", "set", "country", "US"), 0, "[SUCCESS] Saved country for profile \"us-1\". Changes apply on the next connect or refresh.\n", "")
+	assertCommandResult(t, execute("config", "--profile", "us-1", "set", "ip_type", "hosting"), 0, "[SUCCESS] Saved ip_type for profile \"us-1\". Changes apply on the next connect or refresh.\n", "")
 	assertAuthCommandSuccess(t, execute("auth"))
-	assertCommandResult(t, execute("connect"), 0, "exit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
+	assertCommandResult(t, execute("connect"), 0, "[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
 	original := loadEndToEndSession(t)
 
-	assertCommandResult(t, execute("config", "profile", "use", "us-1"), 0, "Active profile: us-1\n", "")
+	assertCommandResult(t, execute("config", "profile", "use", "us-1"), 0, "[SUCCESS] Active profile: us-1. Changes apply on the next connect or refresh.\n", "")
 	if len(server.Snapshot().ConnectRequests) != 1 || strings.Join(runner.actions, ",") != "up" {
 		t.Fatal("profile selection changed the running VPN")
 	}
-	assertCommandResult(t, execute("refresh"), 0, "exit_ip: 2.3.4.5\ncountry: US\ncity: hamburg\n", "")
+	assertCommandResult(t, execute("refresh"), 0, "[SUCCESS] VPN connection refreshed.\nexit_ip: 2.3.4.5\ncountry: US\ncity: hamburg\n", "")
 	updated := loadEndToEndSession(t)
 	if updated.Country != "US" || updated.IPType != "hosting" || updated.PublicKey != original.PublicKey || updated.PrivateKey != original.PrivateKey || updated.ConfigPath != original.ConfigPath {
 		t.Fatal("refresh did not apply profile while preserving the tunnel keys and path")
@@ -152,7 +152,7 @@ func TestCLIProfileSwitchingAppliesToConnectAndRefresh(t *testing.T) {
 			t.Errorf("request %d = %+v, want %v", i, request, want[i])
 		}
 	}
-	assertCommandResult(t, execute("logout"), 0, "Logout successful.\n", "")
+	assertCommandResult(t, execute("logout"), 0, "[SUCCESS] Logout successful.\n", "")
 	assertCommandResult(t, execute("config", "profile", "current"), 0, "us-1\n", "")
 }
 
@@ -165,14 +165,14 @@ func TestCLIProfileRefreshFailurePreservesRunningSession(t *testing.T) {
 	runner := &endToEndTunnelRunner{}
 	execute := func(args ...string) commandResult { return executeCLI(args, cfg, runner) }
 	assertAuthCommandSuccess(t, execute("auth"))
-	assertCommandResult(t, execute("connect", "--country", "DE", "--ip-type", "residential"), 0, "exit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
+	assertCommandResult(t, execute("connect", "--country", "DE", "--ip-type", "residential"), 0, "[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
 	original := loadEndToEndSession(t)
-	assertCommandResult(t, execute("config", "profile", "create", "us-1"), 0, "", "")
-	assertCommandResult(t, execute("config", "profile", "use", "us-1"), 0, "Active profile: us-1\n", "")
-	assertCommandResult(t, execute("config", "set", "country", "US"), 0, "", "")
-	assertCommandResult(t, execute("config", "set", "ip_type", "hosting"), 0, "", "")
+	assertCommandResult(t, execute("config", "profile", "create", "us-1"), 0, "[SUCCESS] Created profile \"us-1\". Select it with \"mystvpn config profile use us-1\".\n", "")
+	assertCommandResult(t, execute("config", "profile", "use", "us-1"), 0, "[SUCCESS] Active profile: us-1. Changes apply on the next connect or refresh.\n", "")
+	assertCommandResult(t, execute("config", "set", "country", "US"), 0, "[SUCCESS] Saved country for profile \"us-1\". Changes apply on the next connect or refresh.\n", "")
+	assertCommandResult(t, execute("config", "set", "ip_type", "hosting"), 0, "[SUCCESS] Saved ip_type for profile \"us-1\". Changes apply on the next connect or refresh.\n", "")
 	server.SetConnectStatus(http.StatusForbidden)
-	assertCommandResult(t, execute("refresh"), 1, "", "mystvpn refresh: HTTP status 403\n")
+	assertCommandResult(t, execute("refresh"), 1, "", "[ERROR] mystvpn refresh: HTTP status 403 (Forbidden): access denied; check your VPN account permissions and subscription\n")
 	if got := loadEndToEndSession(t); !reflect.DeepEqual(got, original) {
 		t.Fatal("failed profile refresh modified the saved session")
 	}

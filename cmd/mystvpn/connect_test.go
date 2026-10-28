@@ -92,7 +92,7 @@ func TestRunConnect(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("runConnect() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	wantOutput := "exit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n"
+	wantOutput := "[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n"
 	if stdout.String() != wantOutput {
 		t.Errorf("stdout = %q, want %q", stdout.String(), wantOutput)
 	}

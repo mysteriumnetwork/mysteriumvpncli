@@ -11,17 +11,17 @@ import (
 
 func runConfig(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("config", flag.ContinueOnError)
-	flags.SetOutput(stderr)
+	flags.SetOutput(io.Discard)
 	flags.Usage = func() {}
 	profileName := flags.String("profile", "", "profile to read or update (defaults to active)")
 	if err := flags.Parse(args); err != nil {
-		fmt.Fprintln(stderr, `mystvpn config: use "mystvpn help config" for usage`)
+		writeError(stderr, "mystvpn config: %v; use \"mystvpn help config\" for usage", err)
 		return 2
 	}
 	args = flags.Args()
 	if len(args) > 0 && args[0] == "profile" {
 		if *profileName != "" {
-			fmt.Fprintln(stderr, "mystvpn config: --profile cannot be combined with config profile; pass the profile name after the action")
+			writeError(stderr, "mystvpn config: --profile cannot be combined with config profile; pass the profile name after the action")
 			return 2
 		}
 		return runConfigProfile(args[1:], stdout, stderr)
@@ -38,18 +38,18 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 		(action == "set" && len(args) == 3) ||
 		(action == "unset" && len(args) == 2)
 	if !valid {
-		fmt.Fprintln(stderr, "mystvpn config: usage: config [--profile <name>] [get [key] | effective | set <key> <value> | unset <key> | path]; config profile [list | current | create <name> | use <name> | delete <name>]")
+		writeError(stderr, "mystvpn config: usage: config [--profile <name>] [get [key] | effective | set <key> <value> | unset <key> | path]; config profile [list | current | create <name> | use <name> | delete <name>]")
 		return 2
 	}
 	if len(args) >= 2 {
 		if _, err := config.DefaultSettings().Get(args[1]); err != nil {
-			fmt.Fprintf(stderr, "mystvpn config: %v\n", err)
+			writeError(stderr, "mystvpn config: %v\n", err)
 			return 2
 		}
 	}
 	store, err := config.NewDefaultStore()
 	if err != nil {
-		fmt.Fprintf(stderr, "mystvpn config: %v\n", err)
+		writeError(stderr, "mystvpn config: %v\n", err)
 		return 1
 	}
 	if action == "path" {
@@ -58,7 +58,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	document, err := store.LoadDocument()
 	if err != nil {
-		fmt.Fprintf(stderr, "mystvpn config: %v\n", err)
+		writeError(stderr, "mystvpn config: %v\n", err)
 		return 1
 	}
 	if action == "set" || action == "unset" {
@@ -68,12 +68,21 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 			err = document.Unset(*profileName, args[1])
 		}
 		if err != nil {
-			fmt.Fprintf(stderr, "mystvpn config: %v\n", err)
+			writeError(stderr, "mystvpn config: %v\n", err)
 			return 2
 		}
 		if err := store.SaveDocument(document); err != nil {
-			fmt.Fprintf(stderr, "mystvpn config: %v\n", err)
+			writeError(stderr, "mystvpn config: %v\n", err)
 			return 1
+		}
+		target := *profileName
+		if target == "" {
+			target = document.ActiveProfile
+		}
+		if action == "set" {
+			writeSuccess(stdout, "Saved %s for profile %q. Changes apply on the next connect or refresh.", args[1], target)
+		} else {
+			writeSuccess(stdout, "Reset %s to its built-in default for profile %q. Changes apply on the next connect or refresh.", args[1], target)
 		}
 		return 0
 	}
@@ -86,7 +95,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 		var settings config.Settings
 		settings, err = document.Effective(*profileName)
 		if err != nil {
-			fmt.Fprintf(stderr, "mystvpn config: %v\n", err)
+			writeError(stderr, "mystvpn config: %v\n", err)
 			return 2
 		}
 		if action == "get" {
@@ -96,7 +105,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 			for _, key := range config.Keys() {
 				value, valueErr := settings.Get(key)
 				if valueErr != nil {
-					fmt.Fprintf(stderr, "mystvpn config: %v\n", valueErr)
+					writeError(stderr, "mystvpn config: %v\n", valueErr)
 					return 2
 				}
 				values[key] = value
@@ -105,7 +114,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "mystvpn config: %v\n", err)
+		writeError(stderr, "mystvpn config: %v\n", err)
 		return 2
 	}
 	if text, ok := output.(string); ok {
@@ -115,7 +124,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(output); err != nil {
-		fmt.Fprintf(stderr, "mystvpn config: write output: %v\n", err)
+		writeError(stderr, "mystvpn config: write output: %v\n", err)
 		return 1
 	}
 	return 0

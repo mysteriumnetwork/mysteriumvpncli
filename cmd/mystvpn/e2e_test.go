@@ -49,8 +49,8 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	}
 
 	server.RejectNextProxyRequest()
-	assertCommandResult(t, execute("countries", "--ip-type", "residential"), 0, "Available countries (3):\n\nCA  DE  SE\n", "")
-	assertCommandResult(t, execute("connect", "--country", "de", "--ip-type", "residential"), 0, "exit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
+	assertCommandResult(t, execute("countries", "--ip-type", "residential"), 0, "[SUCCESS] Available countries (3):\n\nCA  DE  SE\n", "")
+	assertCommandResult(t, execute("connect", "--country", "de", "--ip-type", "residential"), 0, "[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
 
 	connectedSession := loadEndToEndSession(t)
 	if connectedSession.PublicKey == "" || connectedSession.PrivateKey == "" {
@@ -61,7 +61,7 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	assertFileMode(t, connectedSession.ConfigPath, 0o600)
 
 	assertCommandResult(t, execute("status"), 0, "connected: yes\nIP address: 1.2.3.4\ncountry: DE\ncity: berlin\n", "")
-	assertCommandResult(t, execute("refresh"), 0, "exit_ip: 2.3.4.5\ncountry: DE\ncity: hamburg\n", "")
+	assertCommandResult(t, execute("refresh"), 0, "[SUCCESS] VPN connection refreshed.\nexit_ip: 2.3.4.5\ncountry: DE\ncity: hamburg\n", "")
 	assertCommandResult(t, execute("status"), 0, "connected: yes\nIP address: 2.3.4.5\ncountry: DE\ncity: hamburg\n", "")
 
 	refreshedSession := loadEndToEndSession(t)
@@ -75,7 +75,7 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 		t.Errorf("refreshed session = %+v, want updated metadata", refreshedSession)
 	}
 
-	assertCommandResult(t, execute("disconnect"), 0, "Disconnected successfully\n", "")
+	assertCommandResult(t, execute("disconnect"), 0, "[SUCCESS] Disconnected successfully.\n", "")
 	assertCommandResult(t, execute("status"), 0, "connected: no\n", "")
 
 	if _, err := os.Stat(refreshedSession.ConfigPath); !errors.Is(err, os.ErrNotExist) {
@@ -89,7 +89,7 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 		t.Errorf("session Load() error = %v, want removed", err)
 	}
 
-	assertCommandResult(t, execute("logout"), 0, "Logout successful.\n", "")
+	assertCommandResult(t, execute("logout"), 0, "[SUCCESS] Logout successful.\n", "")
 	tokenStore, err := auth.NewDefaultFileStore()
 	if err != nil {
 		t.Fatalf("auth.NewDefaultFileStore() error = %v", err)
@@ -148,7 +148,7 @@ func TestCLIConnectReplacesActiveSession(t *testing.T) {
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "residential"}, cfg, runner),
 		0,
-		"exit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n",
+		"[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n",
 		"",
 	)
 	firstSession := loadEndToEndSession(t)
@@ -157,7 +157,7 @@ func TestCLIConnectReplacesActiveSession(t *testing.T) {
 		t,
 		executeCLI([]string{"connect", "--country", "CA", "--ip-type", "hosting"}, cfg, runner),
 		0,
-		"exit_ip: 2.3.4.5\ncountry: CA\ncity: hamburg\n",
+		"[SUCCESS] Connected to VPN.\nexit_ip: 2.3.4.5\ncountry: CA\ncity: hamburg\n",
 		"",
 	)
 	secondSession := loadEndToEndSession(t)
@@ -199,12 +199,12 @@ func TestCLILogoutDisconnectsActiveSession(t *testing.T) {
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "residential"}, cfg, runner),
 		0,
-		"exit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n",
+		"[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n",
 		"",
 	)
 	session := loadEndToEndSession(t)
 
-	assertCommandResult(t, executeCLI([]string{"logout"}, cfg, runner), 0, "Logout successful.\n", "")
+	assertCommandResult(t, executeCLI([]string{"logout"}, cfg, runner), 0, "[SUCCESS] Logout successful.\n", "")
 	assertCommandResult(t, executeCLI([]string{"status"}, cfg, runner), 0, "connected: no\n", "")
 	if got, want := strings.Join(runner.actions, ","), "up,down"; got != want {
 		t.Errorf("WireGuard actions = %q, want %q", got, want)
@@ -234,7 +234,7 @@ func TestCLIAuthenticationFailureEndToEnd(t *testing.T) {
 	cfg.APIURL = server.APIURL()
 	result := executeCLI([]string{"auth"}, cfg, &endToEndTunnelRunner{})
 
-	assertCommandResult(t, result, 1, "", "mystvpn auth: HTTP status 401\n")
+	assertCommandResult(t, result, 1, "", "[ERROR] mystvpn auth: HTTP status 401 (Unauthorized): authentication expired or was rejected; run \"mystvpn auth\" to sign in again\n")
 	store, err := auth.NewDefaultFileStore()
 	if err != nil {
 		t.Fatalf("auth.NewDefaultFileStore() error = %v", err)
@@ -260,7 +260,7 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "hosting"}, cfg, runner),
 		1,
 		"",
-		"mystvpn connect: HTTP status 403\n",
+		"[ERROR] mystvpn connect: HTTP status 403 (Forbidden): access denied; check your VPN account permissions and subscription\n",
 	)
 	if len(runner.actions) != 0 {
 		t.Errorf("tunnel actions after failed connect = %v, want none", runner.actions)
@@ -278,7 +278,7 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 		t,
 		executeCLI([]string{"connect", "--country", "DE", "--ip-type", "hosting"}, cfg, runner),
 		0,
-		"exit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n",
+		"[SUCCESS] Connected to VPN.\nexit_ip: 1.2.3.4\ncountry: DE\ncity: berlin\n",
 		"",
 	)
 	session := loadEndToEndSession(t)
@@ -289,7 +289,7 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 		executeCLI([]string{"connect", "--country", "CA", "--ip-type", "residential"}, cfg, runner),
 		1,
 		"",
-		"mystvpn connect: HTTP status 403\n",
+		"[ERROR] mystvpn connect: HTTP status 403 (Forbidden): access denied; check your VPN account permissions and subscription\n",
 	)
 	if got := loadEndToEndSession(t); got.SessionID != session.SessionID || got.ConfigPath != session.ConfigPath {
 		t.Error("failed replacement connect changed the active session")
@@ -301,7 +301,7 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 		t.Errorf("disconnect requests = %d, want zero", got)
 	}
 
-	assertCommandResult(t, executeCLI([]string{"refresh"}, cfg, runner), 1, "", "mystvpn refresh: HTTP status 403\n")
+	assertCommandResult(t, executeCLI([]string{"refresh"}, cfg, runner), 1, "", "[ERROR] mystvpn refresh: HTTP status 403 (Forbidden): access denied; check your VPN account permissions and subscription\n")
 	if got := loadEndToEndSession(t); got.SessionID != session.SessionID || got.ConfigPath != session.ConfigPath {
 		t.Error("failed refresh changed the active session")
 	}
@@ -311,7 +311,7 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 
 	server.SetConnectStatus(0)
 	server.SetDisconnectStatus(http.StatusForbidden)
-	assertCommandResult(t, executeCLI([]string{"disconnect"}, cfg, runner), 1, "", "mystvpn disconnect: HTTP status 403\n")
+	assertCommandResult(t, executeCLI([]string{"disconnect"}, cfg, runner), 1, "", "[ERROR] mystvpn disconnect: HTTP status 403 (Forbidden): access denied; check your VPN account permissions and subscription\n")
 	_ = loadEndToEndSession(t)
 	if _, err := os.Stat(session.ConfigPath); err != nil {
 		t.Errorf("config Stat() error = %v, want preserved after failed disconnect", err)
@@ -351,7 +351,7 @@ func assertAuthCommandSuccess(t *testing.T, got commandResult) {
 		t.Fatalf("auth result = exit %d, stdout %q, stderr %q", got.exitCode, got.stdout, got.stderr)
 	}
 	lines := strings.Split(strings.TrimSuffix(got.stdout, "\n"), "\n")
-	if len(lines) != 4 || lines[0] != "Open this URL in your browser to authenticate:" || lines[2] != "Waiting for authentication approval..." || lines[3] != "Authentication successful." {
+	if len(lines) != 4 || lines[0] != "Open this URL in your browser to authenticate:" || lines[2] != "Waiting for authentication approval..." || lines[3] != "[SUCCESS] Authentication successful." {
 		t.Fatalf("auth stdout = %q, want activation instructions and success", got.stdout)
 	}
 	parsed, err := url.Parse(lines[1])

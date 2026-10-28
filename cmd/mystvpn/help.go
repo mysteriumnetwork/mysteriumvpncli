@@ -171,7 +171,7 @@ func runHelp(path []string, stdout, stderr io.Writer) int {
 	for _, name := range path {
 		topic = findHelpTopic(topic.children, name)
 		if topic == nil {
-			fmt.Fprintf(stderr, "mystvpn help: unknown command %q; use \"mystvpn help\" to list commands\n", strings.Join(path, " "))
+			writeError(stderr, "mystvpn help: unknown command %q; use \"mystvpn help\" to list commands\n", strings.Join(path, " "))
 			return 2
 		}
 	}
