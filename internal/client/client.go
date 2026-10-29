@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	defaultMaxRetries   = 3
-	defaultRetryDelay   = 100 * time.Millisecond
-	maxResponseBodySize = 1 << 20
+	defaultMaxRetries = 3
+	defaultRetryDelay = 100 * time.Millisecond
+	// Location catalogues include translations and can exceed 1 MiB.
+	maxResponseBodySize = 16 << 20
 )
 
 // APIError describes a non-successful response from the API.
@@ -267,7 +268,7 @@ func readResponseBody(body io.ReadCloser) ([]byte, error) {
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
 	if len(data) > maxResponseBodySize {
-		return nil, errors.New("response body exceeds 1 MiB limit")
+		return nil, fmt.Errorf("response body exceeds %d MiB limit", maxResponseBodySize/(1<<20))
 	}
 	return data, nil
 }

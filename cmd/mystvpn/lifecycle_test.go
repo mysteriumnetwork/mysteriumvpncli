@@ -187,9 +187,7 @@ func TestRunStatus(t *testing.T) {
 		exitCode := runStatus(nil, &stdout, &stderr)
 
 		want := "Connected:   yes\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n"
-		if exitCode != 0 || stdout.String() != want || stderr.Len() != 0 {
-			t.Errorf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
-		}
+		assertCommandResult(t, withoutStatusDuration(t, commandResult{exitCode: exitCode, stdout: stdout.String(), stderr: stderr.String()}), 0, want, "")
 		if strings.Contains(stdout.String(), session.SessionID) || strings.Contains(stdout.String(), session.PrivateKey) {
 			t.Error("status output contains secret or session ID")
 		}

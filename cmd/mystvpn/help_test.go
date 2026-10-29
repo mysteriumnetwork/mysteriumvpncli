@@ -18,7 +18,7 @@ func TestHelpForEveryCommandWithoutValidConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := []string{
-		"", "auth", "countries", "connect", "refresh", "status", "disconnect", "logout", "version", "help",
+		"", "auth", "countries", "cities", "connect", "refresh", "status", "disconnect", "logout", "version", "help",
 		"config", "config get", "config effective", "config set", "config unset", "config path",
 		"config profile", "config profile list", "config profile current", "config profile create",
 		"config profile use", "config profile delete",
@@ -57,6 +57,7 @@ func TestCommandHelpExplainsBehavior(t *testing.T) {
 		want []string
 	}{
 		{"connect", []string{"--profile <name>", "--country <code>", "--ip-type <type>", "residential or hosting", "case-insensitive", "built-in default: " + config.DefaultSettings().Country, "override the profile", "Requires authentication"}},
+		{"cities", []string{"--country <code>", "--ip-type <type>", "city/state", "Requires authentication"}},
 		{"countries", []string{"Optional: residential or hosting", "active profile's IP type", "heading shows the IP type", "Requires authentication"}},
 		{"config", []string{"get", "effective", "set", "unset", "path", "profile", "saved overrides as JSON", "Place this flag before", "country", "ip_type"}},
 		{"config get", []string{"get [key]", "built-in", "--profile"}},

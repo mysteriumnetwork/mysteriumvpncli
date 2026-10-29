@@ -6,11 +6,63 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 	"unicode/utf8"
 
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/proxy"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/state"
 )
+
+func writeCities(output io.Writer, locations []proxy.ConnectionLocation, country string, ipType proxy.IPType) {
+	var cities []string
+	for _, location := range locations {
+		if countryCode(location.Country) != country || (location.IsAvailable != nil && !*location.IsAvailable) {
+			continue
+		}
+		for _, city := range location.Cities {
+			if city.IsAvailable == nil || *city.IsAvailable {
+				cities = append(cities, city.City)
+			}
+		}
+	}
+	sort.Strings(cities)
+	writeSuccess(output, "Available cities/states (%d) in %s for IP type: %s", len(cities), country, ipType)
+	if len(cities) == 0 {
+		return
+	}
+	fmt.Fprintln(output)
+	if len(cities) == 1 {
+		fmt.Fprintln(output, cities[0])
+		return
+	}
+	// Read down the first column, then the second, matching the countries list.
+	rows := (len(cities) + 1) / 2
+	leftWidth := 0
+	for _, city := range cities[:rows] {
+		leftWidth = max(leftWidth, utf8.RuneCountInString(city))
+	}
+	for i, city := range cities[:rows] {
+		if i+rows < len(cities) {
+			fmt.Fprintf(output, "%-*s    %s\n", leftWidth, city, cities[i+rows])
+		} else {
+			fmt.Fprintln(output, city)
+		}
+	}
+}
+
+func cityTargetAvailable(locations []proxy.ConnectionLocation, country, city string) bool {
+	for _, location := range locations {
+		if countryCode(location.Country) != country || (location.IsAvailable != nil && !*location.IsAvailable) {
+			continue
+		}
+		for _, candidate := range location.Cities {
+			if candidate.City == city && (candidate.IsAvailable == nil || *candidate.IsAvailable) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func countryCode(value string) string {
 	return strings.ToUpper(strings.TrimSpace(value))
@@ -43,6 +95,13 @@ func writeConnectionDetails(output io.Writer, session state.Session, includeStat
 	fmt.Fprintf(table, "IP type:\t%s\n", ipType)
 	fmt.Fprintf(table, "Country:\t%s\n", location)
 	fmt.Fprintf(table, "City:\t%s\n", session.City)
+	if includeStatus {
+		duration := "unknown"
+		if !session.Timestamp.IsZero() {
+			duration = max(0, time.Since(session.Timestamp)).Truncate(time.Second).String()
+		}
+		fmt.Fprintf(table, "Duration:\t%s\n", duration)
+	}
 	_ = table.Flush()
 }
 

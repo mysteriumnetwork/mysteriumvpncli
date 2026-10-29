@@ -155,7 +155,7 @@ func TestStatusShowsSessionIPTypeInsteadOfProfileDefault(t *testing.T) {
 	saveTestSession(t) // Residential connection in Germany.
 	writeTestConfigJSON(t, `{"profiles":{"default":{"country":"US","ip_type":"hosting"}}}`)
 	result := executeCLI([]string{"status"}, config.Load(), nil)
-	assertCommandResult(t, result, 0, "Connected:   yes\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n", "")
+	assertCommandResult(t, withoutStatusDuration(t, result), 0, "Connected:   yes\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n", "")
 }
 
 func TestStatusPreservesUnknownLocationAndMissingIPType(t *testing.T) {
@@ -170,5 +170,5 @@ func TestStatusPreservesUnknownLocationAndMissingIPType(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := executeCLI([]string{"status"}, config.Load(), nil)
-	assertCommandResult(t, result, 0, "Connected:   yes\nIP address:  1.2.3.4\nIP type:     unknown\nCountry:     ZZ (Unknown country)\nCity:        berlin\n", "")
+	assertCommandResult(t, withoutStatusDuration(t, result), 0, "Connected:   yes\nIP address:  1.2.3.4\nIP type:     unknown\nCountry:     ZZ (Unknown country)\nCity:        berlin\n", "")
 }

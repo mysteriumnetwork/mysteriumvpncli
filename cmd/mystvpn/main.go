@@ -49,6 +49,8 @@ func runWithDependencies(args []string, stdin *os.File, stdout, stderr io.Writer
 		return runAuth(args[1:], cfg, stdout, stderr)
 	case "countries":
 		return runCountries(args[1:], cfg, stdout, stderr)
+	case "cities":
+		return runCities(args[1:], cfg, stdout, stderr)
 	case "connect":
 		return runConnect(args[1:], cfg, stdout, stderr, tunnelRunner)
 	case "refresh":
@@ -75,6 +77,7 @@ func runConnect(args []string, cfg config.Config, stdout, stderr io.Writer, tunn
 	flags := flag.NewFlagSet("connect", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	countryValue := flags.String("country", "", "country code")
+	cityValue := flags.String("city", "", "city or state identifier (empty for any)")
 	ipTypeValue := flags.String("ip-type", "", "IP address type")
 	profileName := flags.String("profile", "", "profile to use for this connection (defaults to active)")
 	flags.Usage = func() {}
@@ -102,12 +105,21 @@ func runConnect(args []string, cfg config.Config, stdout, stderr io.Writer, tunn
 		writeError(stderr, "mystvpn connect: %v\n", err)
 		return 2
 	}
-	// Only omitted flags inherit defaults; an explicit empty value still fails
-	// validation instead of silently falling back to the saved setting.
+	// Only omitted flags inherit defaults. An empty city explicitly removes
+	// city/state targeting; required settings still reject empty values.
 	provided := make(map[string]bool)
 	flags.Visit(func(f *flag.Flag) { provided[f.Name] = true })
 	if !provided["country"] {
 		*countryValue = settings.Country
+	}
+	if !provided["city"] {
+		*cityValue = settings.City
+	}
+	target := settings
+	target.City = *cityValue
+	if err := target.Normalize(); err != nil {
+		writeError(stderr, "mystvpn connect: %v", err)
+		return 2
 	}
 	if !provided["ip-type"] {
 		*ipTypeValue = settings.IPType
@@ -161,7 +173,7 @@ func runConnect(args []string, cfg config.Config, stdout, stderr io.Writer, tunn
 		}
 	}
 
-	return establishConnection("connect", cfg, stdout, stderr, tunnelRunner, sessionStore, activeSession, keyPair, country, ipType)
+	return establishConnection("connect", cfg, stdout, stderr, tunnelRunner, sessionStore, activeSession, keyPair, country, target.City, ipType)
 }
 
 func runRefresh(args []string, cfg config.Config, stdout, stderr io.Writer, tunnelRunner wireguard.TunnelRunner) int {
@@ -198,10 +210,10 @@ func runRefresh(args []string, cfg config.Config, stdout, stderr io.Writer, tunn
 	}
 
 	keyPair := wireguard.KeyPair{PublicKey: session.PublicKey, PrivateKey: session.PrivateKey}
-	return establishConnection("refresh", cfg, stdout, stderr, tunnelRunner, sessionStore, &session, keyPair, settings.Country, proxy.IPType(settings.IPType))
+	return establishConnection("refresh", cfg, stdout, stderr, tunnelRunner, sessionStore, &session, keyPair, settings.Country, settings.City, proxy.IPType(settings.IPType))
 }
 
-func establishConnection(command string, cfg config.Config, stdout, stderr io.Writer, tunnelRunner wireguard.TunnelRunner, sessionStore *state.Store, activeSession *state.Session, keyPair wireguard.KeyPair, country string, ipType proxy.IPType) int {
+func establishConnection(command string, cfg config.Config, stdout, stderr io.Writer, tunnelRunner wireguard.TunnelRunner, sessionStore *state.Store, activeSession *state.Session, keyPair wireguard.KeyPair, country, city string, ipType proxy.IPType) int {
 	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
 	if err != nil {
 		writeError(stderr, "mystvpn %s: could not initialize the HTTP client; check the API URL and timeout", command)
@@ -217,9 +229,22 @@ func establishConnection(command string, cfg config.Config, stdout, stderr io.Wr
 		return 1
 	}
 
+	if city != "" {
+		locations, err := proxy.GetConnectionLocations(context.Background(), apiClient, ipType)
+		if err != nil {
+			writeError(stderr, "mystvpn %s: could not validate city/state %q in %s for IP type %s: %s", command, city, country, ipType, requestErrorMessage(command, err))
+			return 1
+		}
+		if !cityTargetAvailable(locations, country, city) {
+			writeError(stderr, "mystvpn %s: city/state %q is not currently available in %s for IP type %s for your account; run \"mystvpn cities --country %s --ip-type %s\" to choose another target, then update the profile's city setting or override it with --city; use \"mystvpn connect --city=\" for country-wide targeting", command, city, country, ipType, country, ipType)
+			return 2
+		}
+	}
+
 	response, err := proxy.Connect(context.Background(), apiClient, proxy.ConnectRequest{
 		PublicKey:       keyPair.PublicKey,
 		Country:         country,
+		City:            city,
 		IPType:          ipType,
 		OSType:          proxy.OSTypeLinux,
 		ResetConnection: true,
@@ -267,6 +292,9 @@ func establishConnection(command string, cfg config.Config, stdout, stderr io.Wr
 	}
 	if session.Country == "" {
 		session.Country = country
+	}
+	if session.City == "" {
+		session.City = city
 	}
 	if session.IPType == "" {
 		session.IPType = string(ipType)
@@ -428,63 +456,107 @@ func writeConnectRequestError(output io.Writer, err error) {
 }
 
 func runCountries(args []string, cfg config.Config, stdout, stderr io.Writer) int {
-	flags := flag.NewFlagSet("countries", flag.ContinueOnError)
+	return runLocationListing("countries", args, cfg, stdout, stderr)
+}
+
+func runCities(args []string, cfg config.Config, stdout, stderr io.Writer) int {
+	return runLocationListing("cities", args, cfg, stdout, stderr)
+}
+
+func runLocationListing(command string, args []string, cfg config.Config, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	ipTypeValue := flags.String("ip-type", "", "IP address type")
+	var countryValue *string
+	if command == "cities" {
+		countryValue = flags.String("country", "", "country code (default: active profile)")
+	}
 	flags.Usage = func() {}
 
 	if err := flags.Parse(args); err != nil {
-		writeError(stderr, "mystvpn countries: %v; use \"mystvpn help countries\" for usage", err)
+		writeError(stderr, "mystvpn %s: %v; use \"mystvpn help %s\" for usage", command, err, command)
 		return 2
 	}
 	if flags.NArg() != 0 {
-		writeError(stderr, "mystvpn countries: unexpected argument %q\n", flags.Arg(0))
+		writeError(stderr, "mystvpn %s: unexpected argument %q\n", command, flags.Arg(0))
 		return 2
 	}
-	provided := false
-	flags.Visit(func(f *flag.Flag) { provided = provided || f.Name == "ip-type" })
-	if !provided {
+	provided := make(map[string]bool)
+	flags.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	if !provided["ip-type"] || (command == "cities" && !provided["country"]) {
 		store, err := config.NewDefaultStore()
 		if err != nil {
-			writeError(stderr, "mystvpn countries: %v", err)
+			writeError(stderr, "mystvpn %s: %v", command, err)
 			return 1
 		}
 		document, err := store.LoadDocument()
 		if err != nil {
-			writeError(stderr, "mystvpn countries: %v", err)
+			writeError(stderr, "mystvpn %s: %v", command, err)
 			return 1
 		}
-		value, err := document.EffectiveValue("", "ip_type")
-		if err != nil {
-			writeError(stderr, "mystvpn countries: %v", err)
-			return 2
+		for _, key := range []string{"ip_type", "country"} {
+			flagName := "ip-type"
+			target := ipTypeValue
+			if key == "country" {
+				if command != "cities" {
+					continue
+				}
+				flagName, target = "country", countryValue
+			}
+			if provided[flagName] {
+				continue
+			}
+			value, err := document.EffectiveValue("", key)
+			if err != nil {
+				writeError(stderr, "mystvpn %s: %v", command, err)
+				return 2
+			}
+			*target = value.(string)
 		}
-		*ipTypeValue = value.(string)
 	}
 	ipType, err := proxy.ParseIPType(*ipTypeValue)
 	if err != nil {
-		writeError(stderr, "mystvpn countries: %v\n", err)
+		writeError(stderr, "mystvpn %s: %v\n", command, err)
 		return 2
+	}
+
+	country := ""
+	if countryValue != nil {
+		country, err = proxy.ParseCountry(*countryValue)
+		if err != nil {
+			writeError(stderr, "mystvpn %s: %v", command, err)
+			return 2
+		}
 	}
 
 	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
 	if err != nil {
-		writeCountriesError(stderr, err)
+		writeRequestError(stderr, command, err)
 		return 1
 	}
 	authService, err := newAuthService(cfg)
 	if err != nil {
-		writeCountriesError(stderr, err)
+		writeRequestError(stderr, command, err)
 		return 1
 	}
 	if err := authService.ConfigureClient(apiClient); err != nil {
-		writeCountriesError(stderr, err)
+		writeRequestError(stderr, command, err)
 		return 1
+	}
+
+	if command == "cities" {
+		locations, err := proxy.GetConnectionLocations(context.Background(), apiClient, ipType)
+		if err != nil {
+			writeRequestError(stderr, command, err)
+			return 1
+		}
+		writeCities(stdout, locations, country, ipType)
+		return 0
 	}
 
 	connectionConfig, err := proxy.GetConnectionConfig(context.Background(), apiClient, ipType)
 	if err != nil {
-		writeCountriesError(stderr, err)
+		writeRequestError(stderr, command, err)
 		return 1
 	}
 	writeCountries(stdout, connectionConfig.Countries, ipType)

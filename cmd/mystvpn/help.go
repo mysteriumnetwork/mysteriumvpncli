@@ -70,19 +70,25 @@ var helpTopics = []helpTopic{
 		examples:    "sudo mystvpn countries\nsudo mystvpn countries --ip-type hosting",
 	},
 	{
-		name: "connect", usage: "connect [--profile <name>] [--country <code>] [--ip-type <residential|hosting>]", summary: "Connect to a country, replacing any active VPN connection.",
-		description: "Requires authentication and permission to manage WireGuard interfaces.\nOmitted flags use the selected profile's settings, then built-in defaults.\nExplicit flags override the profile for this connection only. The new\nconfiguration is requested before the existing tunnel is brought down.",
-		flags:       "--profile <name>  Profile to use (default: active profile).\n--country <code>  Two-letter country code, e.g. DE or US (case-insensitive).\n--ip-type <type>  residential or hosting.",
+		name: "cities", usage: "cities [--country <code>] [--ip-type <residential|hosting>]", summary: "List available city/state identifiers within a country.",
+		description: "Requires authentication. Omitted flags use the active profile's country and\nIP type. Explicit flags override them for this listing only. Use the exact\nidentifier from the list with connect --city; states use the same city field.",
+		flags:       "--country <code>  Two-letter country code (default: active profile).\n--ip-type <type>  Optional: residential or hosting (default: active profile).",
+		examples:    "sudo mystvpn cities\nsudo mystvpn cities --country DE --ip-type hosting",
+	},
+	{
+		name: "connect", usage: "connect [--profile <name>] [--country <code>] [--city <identifier>] [--ip-type <residential|hosting>]", summary: "Connect to a country, replacing any active VPN connection.",
+		description: "Requires authentication and permission to manage WireGuard interfaces.\nOmitted flags use the selected profile's settings, then built-in defaults.\nExplicit flags override the profile for this connection only. Use --city=\nto clear a saved city/state and target the whole country. The new\nconfiguration is requested before the existing tunnel is brought down.",
+		flags:       "--profile <name>  Profile to use (default: active profile).\n--country <code>  Two-letter country code, e.g. DE or US (case-insensitive).\n--city <identifier> City/state identifier from cities (empty for any).\n--ip-type <type>  residential or hosting.",
 		examples:    "sudo mystvpn connect\nsudo mystvpn connect --country US --ip-type hosting\nsudo mystvpn connect --profile work",
 	},
 	{
 		name: "refresh", usage: "refresh", summary: "Reconnect using the active profile and saved WireGuard keypair.",
-		description: "Requires an active session and permission to manage WireGuard interfaces.\nUses the active profile's current country and IP type, including changes\nsaved since the connection was established.",
+		description: "Requires an active session and permission to manage WireGuard interfaces.\nUses the active profile's current country and IP type, plus city/state targeting.\nIncludes changes saved since the connection was established.",
 		examples:    "sudo mystvpn refresh",
 	},
 	{
 		name: "status", usage: "status", summary: "Show the locally saved VPN connection status.",
-		description: "Reads local session state without an API request or a live connectivity check.\nShows the saved session's IP type, country code and full name, and city.\nReports disconnected when there is no saved session.",
+		description: "Reads local session state without an API request or a live connectivity check.\nShows the saved session's IP type, country code and full name, city, and duration\nsince the latest connect or refresh. Reports disconnected when there is no saved session.",
 		examples:    "sudo mystvpn status",
 	},
 	{
@@ -129,7 +135,7 @@ func helpRequest(args []string) ([]string, bool) {
 		}
 		if strings.HasPrefix(arg, "-") {
 			name, _, hasValue := strings.Cut(strings.TrimLeft(arg, "-"), "=")
-			if !hasValue && (name == "country" || name == "ip-type" || name == "profile") {
+			if !hasValue && (name == "country" || name == "city" || name == "ip-type" || name == "profile") {
 				i++
 			}
 			continue
@@ -201,6 +207,7 @@ func runHelp(path []string, stdout, stderr io.Writer) int {
 		defaults := config.DefaultSettings()
 		fmt.Fprintln(stdout, "\nSettings:")
 		fmt.Fprintf(stdout, "  country  Two-letter country code (built-in default: %s).\n", defaults.Country)
+		fmt.Fprintln(stdout, "  city     Optional city/state identifier (built-in default: any).")
 		fmt.Fprintf(stdout, "  ip_type  residential or hosting (built-in default: %s).\n", defaults.IPType)
 	}
 	if topic.examples != "" {

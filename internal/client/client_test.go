@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,28 @@ import (
 	"testing"
 	"time"
 )
+
+func TestReadResponseBodyLimit(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		size      int
+		wantError bool
+	}{
+		{"at limit", maxResponseBodySize, false},
+		{"over limit", maxResponseBodySize + 1, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := readResponseBody(io.NopCloser(strings.NewReader(strings.Repeat("x", test.size))))
+			if test.wantError {
+				if err == nil || err.Error() != "response body exceeds 16 MiB limit" || body != nil {
+					t.Fatalf("oversized response: %d bytes, %v", len(body), err)
+				}
+			} else if err != nil || len(body) != test.size {
+				t.Fatalf("response: %d bytes, %v; want %d bytes", len(body), err, test.size)
+			}
+		})
+	}
+}
 
 func TestClientRequests(t *testing.T) {
 	tests := []struct {
