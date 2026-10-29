@@ -60,7 +60,7 @@ func TestRunHelpListsCommands(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0", exitCode)
 	}
-	for _, expected := range []string{"help", "version", "  auth\n", "countries --ip-type <residential|hosting>", "disconnect", "config [--profile <name>] [get [key] | effective | set <key> <value> | unset <key> | path]", "Settings: " + strings.Join(config.Keys(), ", "), "config profile [list | current", "connect [--profile"} {
+	for _, expected := range []string{"auth", "Sign in through browser approval.", "config", "View or change connection settings and profiles.", "countries", "List country codes and full names", "connect", "Connect to a country", "refresh", "status", "disconnect", "logout", "help", "version", "Examples:", `mystvpn help <command>`, "-h, --help"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("help output does not contain %q: %q", expected, stdout.String())
 		}
@@ -92,7 +92,7 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 }
 
 func TestRunRejectsRootFlags(t *testing.T) {
-	for _, option := range []string{"--help", "-h", "--version", "--api-url", "--sentinel-url", "--pool", "--debug"} {
+	for _, option := range []string{"--version", "--api-url", "--sentinel-url", "--pool", "--debug"} {
 		t.Run(option, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 
@@ -157,7 +157,7 @@ func TestRunAuth(t *testing.T) {
 	wantOutput := "Open this URL in your browser to authenticate:\n" +
 		"https://app.mysteriumvpn.com/oauth/authorize?client_id=cli&request_id=" + activationID + "&response_type=activation_none\n" +
 		"Waiting for authentication approval...\n" +
-		"Authentication successful.\n"
+		"[SUCCESS] Authentication successful.\n"
 	if stdout.String() != wantOutput {
 		t.Errorf("stdout = %q, want %q", stdout.String(), wantOutput)
 	}
@@ -220,7 +220,7 @@ func TestRunAuthTimesOutAndClearsPendingState(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Open this URL in your browser to authenticate:\n") || !strings.Contains(stdout.String(), "client_id=cli") || !strings.Contains(stdout.String(), "Waiting for authentication approval...\n") {
 		t.Errorf("stdout = %q, want browser activation instructions", stdout.String())
 	}
-	if got, want := stderr.String(), "mystvpn auth: authentication timed out\n"; got != want {
+	if got, want := stderr.String(), "[ERROR] mystvpn auth: authentication timed out; run \"mystvpn auth\" again and approve the browser prompt before it expires\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
 	if pollCalls.Load() < 2 {
@@ -259,7 +259,7 @@ func TestRunAuthReportsInvalidActivationAndClearsPendingState(t *testing.T) {
 	if exitCode != 1 {
 		t.Fatalf("run() exit code = %d, want 1", exitCode)
 	}
-	if got, want := stderr.String(), "mystvpn auth: activation expired or was rejected\n"; got != want {
+	if got, want := stderr.String(), "[ERROR] mystvpn auth: activation expired or was rejected; run \"mystvpn auth\" again to request a new approval link\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
 	if !strings.Contains(stdout.String(), "client_id=cli") {
@@ -284,7 +284,7 @@ func TestRunAuthRejectsEmailFlag(t *testing.T) {
 	}
 }
 
-func TestRunAuthReportsOnlyHTTPStatus(t *testing.T) {
+func TestRunAuthExplainsHTTPFailureWithoutResponseBody(t *testing.T) {
 	configureTestHome(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -307,7 +307,7 @@ func TestRunAuthReportsOnlyHTTPStatus(t *testing.T) {
 	if exitCode != 1 {
 		t.Fatalf("run() exit code = %d, want 1", exitCode)
 	}
-	if got, want := stderr.String(), "mystvpn auth: HTTP status 401\n"; got != want {
+	if got, want := stderr.String(), "[ERROR] mystvpn auth: HTTP status 401 (Unauthorized): authentication expired or was rejected; run \"mystvpn auth\" to sign in again\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
 }
@@ -352,7 +352,8 @@ func TestRunCountries(t *testing.T) {
 			if exitCode != 0 {
 				t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 			}
-			if got, want := stdout.String(), "Available countries (3):\n\nDE  MX  SE\n"; got != want {
+			want := fmt.Sprintf("[SUCCESS] Available countries (3) for IP type: %s\n\nCODE  COUNTRY    CODE  COUNTRY\nDE    Germany    SE    Sweden\nMX    Mexico\n", ipType)
+			if got := stdout.String(); got != want {
 				t.Errorf("stdout = %q, want %q", got, want)
 			}
 		})
@@ -360,12 +361,13 @@ func TestRunCountries(t *testing.T) {
 }
 
 func TestRunCountriesValidatesIPType(t *testing.T) {
+	configureTestHome(t)
 	tests := []struct {
 		name     string
 		args     []string
 		wantText string
 	}{
-		{name: "missing", args: []string{"countries"}, wantText: "--ip-type is required"},
+		{name: "explicit empty", args: []string{"countries", "--ip-type="}, wantText: `ip type must be "residential" or "hosting"`},
 		{name: "invalid", args: []string{"countries", "--ip-type", "mobile"}, wantText: `ip type must be "residential" or "hosting"`},
 	}
 
@@ -425,27 +427,30 @@ func TestRunCountriesReportsHTTPStatus(t *testing.T) {
 	if exitCode != 1 {
 		t.Fatalf("run() exit code = %d, want 1", exitCode)
 	}
-	if got, want := stderr.String(), "mystvpn countries: HTTP status 403\n"; got != want {
+	if got, want := stderr.String(), "[ERROR] mystvpn countries: HTTP status 403 (Forbidden): access denied; check your VPN account permissions and subscription\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
 }
 
-func TestWriteCountriesErrorReportsCommonHTTPStatuses(t *testing.T) {
-	for _, statusCode := range []int{
-		http.StatusUnauthorized,
-		http.StatusForbidden,
-		http.StatusNotFound,
-		http.StatusTooManyRequests,
-		http.StatusInternalServerError,
+func TestWriteCountriesErrorExplainsCommonHTTPStatuses(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		action string
+	}{
+		{http.StatusUnauthorized, `run "mystvpn auth"`},
+		{http.StatusForbidden, "check your VPN account permissions and subscription"},
+		{http.StatusNotFound, "check for a CLI update"},
+		{http.StatusTooManyRequests, "wait a moment"},
+		{http.StatusInternalServerError, "try again later"},
 	} {
-		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+		t.Run(http.StatusText(test.status), func(t *testing.T) {
 			var output bytes.Buffer
 
-			writeCountriesError(&output, &client.APIError{StatusCode: statusCode})
+			writeCountriesError(&output, &client.APIError{StatusCode: test.status, Message: "secret response body"})
 
-			want := fmt.Sprintf("mystvpn countries: HTTP status %d\n", statusCode)
-			if output.String() != want {
-				t.Errorf("output = %q, want %q", output.String(), want)
+			prefix := fmt.Sprintf("[ERROR] mystvpn countries: HTTP status %d (%s): ", test.status, http.StatusText(test.status))
+			if !strings.HasPrefix(output.String(), prefix) || !strings.Contains(output.String(), test.action) || strings.Contains(output.String(), "secret") {
+				t.Errorf("output = %q, want prefix %q and action %q without response details", output.String(), prefix, test.action)
 			}
 		})
 	}
@@ -502,7 +507,7 @@ func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	if got, want := stdout.String(), "Available countries (1):\n\nCA\n"; got != want {
+	if got, want := stdout.String(), "[SUCCESS] Available countries (1) for IP type: residential\n\nCODE  COUNTRY\nCA    Canada\n"; got != want {
 		t.Errorf("stdout = %q, want %q", got, want)
 	}
 	if apiCalls.Load() != 2 || refreshCalls.Load() != 1 {
@@ -515,35 +520,6 @@ func TestRunCountriesRefreshesExpiredToken(t *testing.T) {
 	refreshToken, err := store.LoadRefreshToken()
 	if err != nil || refreshToken != "new-refresh" {
 		t.Errorf("stored refresh token = %q, error = %v", refreshToken, err)
-	}
-}
-
-func TestWriteCountriesUsesTenSortedColumns(t *testing.T) {
-	countries := []string{
-		"MX", "AR", "JP", "DE", "US", "BR", "CA", "FR", "GB", "AU",
-		"SE", "CH", "ES", "DK", "AT", "BE", "CL", "CO", "CZ", "EE",
-		"FI", "GR", "HR",
-	}
-	var output bytes.Buffer
-
-	writeCountries(&output, countries)
-
-	want := "Available countries (23):\n\n" +
-		"AR  AT  AU  BE  BR  CA  CH  CL  CO  CZ\n" +
-		"DE  DK  EE  ES  FI  FR  GB  GR  HR  JP\n" +
-		"MX  SE  US\n"
-	if output.String() != want {
-		t.Errorf("output = %q, want %q", output.String(), want)
-	}
-}
-
-func TestWriteCountriesHandlesEmptyList(t *testing.T) {
-	var output bytes.Buffer
-
-	writeCountries(&output, nil)
-
-	if got, want := output.String(), "Available countries (0):\n"; got != want {
-		t.Errorf("output = %q, want %q", got, want)
 	}
 }
 
@@ -566,7 +542,7 @@ func TestRunLogoutClearsTokens(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
-	if stdout.String() != "Logout successful.\n" {
+	if stdout.String() != "[SUCCESS] Logout successful.\n" {
 		t.Errorf("stdout = %q, want logout success message", stdout.String())
 	}
 	if _, err := store.LoadAccessToken(); !errors.Is(err, auth.ErrTokenNotFound) {

@@ -114,7 +114,9 @@ Debian filenames follow `mystvpn_<version>_<architecture>.deb`.
 
 | Command | What it does |
 | --- | --- |
-| `mystvpn help` | Show available commands. Running `mystvpn` alone also shows help. |
+| `mystvpn help` | Show command descriptions and quick-start examples. Running `mystvpn` alone also shows help. |
+| `mystvpn help connect` | Show a command's usage, flags, defaults, and examples. Also accepts `mystvpn connect --help` or `-h`. |
+| `mystvpn help config profile create` | Show help for a nested subcommand. Also accepts `mystvpn config profile create --help`. |
 | `mystvpn version` | Show the installed version. |
 | `sudo mystvpn auth` | Sign in through browser approval. |
 | `sudo mystvpn config profile list` | List profiles, marking the active selection with `*`. |
