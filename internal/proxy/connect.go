@@ -16,6 +16,7 @@ const (
 type ConnectRequest struct {
 	PublicKey       string `json:"public_key"`
 	Country         string `json:"country"`
+	City            string `json:"city,omitempty"`
 	IPType          IPType `json:"ip_type"`
 	OSType          string `json:"os_type"`
 	ResetConnection bool   `json:"reset_connection"`

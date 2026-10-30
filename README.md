@@ -131,6 +131,8 @@ Debian filenames follow `mystvpn_<version>_<architecture>.deb`.
 | `sudo mystvpn config unset country` | Remove a saved override. |
 | `sudo mystvpn config path` | Print the config file location. |
 | `sudo mystvpn countries --ip-type residential` | List available country codes for an IP type. |
+| `sudo mystvpn cities --country DE --ip-type residential` | List available city/state identifiers in a country. |
+| `sudo mystvpn connect --country DE --city berlin --ip-type residential` | Connect to a city/state within a country. |
 | `sudo mystvpn connect --country DE --ip-type residential` | Connect to a country, replacing any active connection. |
 | `sudo mystvpn status` | Show the locally saved connection status. |
 | `sudo mystvpn refresh` | Reconnect using the selected profile and saved WireGuard keypair. |
@@ -179,6 +181,17 @@ To connect, provide a two-letter country code and an IP type
 sudo mystvpn connect --country DE --ip-type residential
 ```
 
+To narrow a country to a city (or state where the service provides states),
+list its targets and pass the exact identifier to `--city`:
+
+```sh
+sudo mystvpn cities --country DE --ip-type residential
+sudo mystvpn connect --country DE --city berlin --ip-type residential
+sudo mystvpn config set city berlin
+sudo mystvpn config get city
+sudo mystvpn config unset city
+```
+
 Run `connect` again with another country or IP type to replace the active
 connection. You do not need to disconnect first. The client requests the new
 configuration before bringing the existing tunnel down.
@@ -200,14 +213,16 @@ sudo mystvpn status
 Example output:
 
 ```text
-connected: yes
-IP address: 1.2.3.4
-country: DE
-city: berlin
+Connected:   yes
+IP address:  1.2.3.4
+IP type:     residential
+Country:     DE (Germany)
+City:        berlin
+Duration:    1h23m45s
 ```
 
 Status reads local state without making an API request; it is not a live
-connectivity check. With no active session, it prints `connected: no`.
+connectivity check. With no active session, it prints `Connected:  no`.
 
 To reconnect using the selected profile:
 

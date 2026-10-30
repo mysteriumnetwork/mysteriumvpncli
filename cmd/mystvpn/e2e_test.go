@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/auth"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/config"
@@ -60,9 +61,9 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	assertFileMode(t, filepath.Join(testConfigDirectory(t), "mystvpn", "wireguard", "keypair.json"), 0o600)
 	assertFileMode(t, connectedSession.ConfigPath, 0o600)
 
-	assertCommandResult(t, execute("status"), 0, "Connected:   yes\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n", "")
+	assertCommandResult(t, withoutStatusDuration(t, execute("status")), 0, "Connected:   yes\nIP address:  1.2.3.4\nIP type:     residential\nCountry:     DE (Germany)\nCity:        berlin\n", "")
 	assertCommandResult(t, execute("refresh"), 0, "[SUCCESS] VPN connection refreshed.\n\nIP address:  2.3.4.5\nIP type:     residential\nCountry:     DE (Germany)\nCity:        hamburg\n", "")
-	assertCommandResult(t, execute("status"), 0, "Connected:   yes\nIP address:  2.3.4.5\nIP type:     residential\nCountry:     DE (Germany)\nCity:        hamburg\n", "")
+	assertCommandResult(t, withoutStatusDuration(t, execute("status")), 0, "Connected:   yes\nIP address:  2.3.4.5\nIP type:     residential\nCountry:     DE (Germany)\nCity:        hamburg\n", "")
 
 	refreshedSession := loadEndToEndSession(t)
 	if refreshedSession.PublicKey != connectedSession.PublicKey || refreshedSession.PrivateKey != connectedSession.PrivateKey {
@@ -425,4 +426,28 @@ func (r *endToEndTunnelRunner) Down(_ context.Context, configPath string) error 
 		return fmt.Errorf("inspect config: %w", err)
 	}
 	return nil
+}
+
+// Check elapsed time separately so full-output assertions do not depend on timing.
+func withoutStatusDuration(t *testing.T, result commandResult) commandResult {
+	t.Helper()
+	session := loadEndToEndSession(t)
+	prefix, line, found := strings.Cut(result.stdout, "Duration:")
+	if !found {
+		t.Fatalf("status output is missing duration: %q", result.stdout)
+	}
+	value := strings.TrimSpace(line)
+	if session.Timestamp.IsZero() {
+		if value != "unknown" {
+			t.Errorf("duration = %q, want unknown", value)
+		}
+	} else {
+		duration, err := time.ParseDuration(value)
+		elapsed := max(0, time.Since(session.Timestamp))
+		if err != nil || duration < 0 || duration > elapsed || elapsed-duration > time.Second {
+			t.Errorf("duration = %q, want elapsed time near %v (parse error: %v)", value, elapsed, err)
+		}
+	}
+	result.stdout = prefix
+	return result
 }

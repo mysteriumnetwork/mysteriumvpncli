@@ -115,6 +115,19 @@ func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleOAuthToken(writer, request)
 	case request.URL.Path == "/api/v1/connection/config":
 		s.handleCountries(writer, request)
+	case request.URL.Path == "/api/v1/connection/config/locations":
+		if request.Method != http.MethodGet {
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !s.authorized(request) {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		writeJSON(writer, http.StatusOK, []proxy.ConnectionLocation{
+			{Country: "DE", Cities: []proxy.ConnectionCity{{City: "berlin"}, {City: "hamburg"}}},
+			{Country: "US", Cities: []proxy.ConnectionCity{{City: "New York"}}},
+		})
 	case request.URL.Path == "/api/v1/connection/connect":
 		s.handleConnect(writer, request)
 	case request.URL.Path == "/api/v1/connection/disconnect":
@@ -251,6 +264,9 @@ func (s *Server) handleConnect(writer http.ResponseWriter, request *http.Request
 	if connectionNumber > 1 {
 		exitIP = "2.3.4.5"
 		city = "hamburg"
+	}
+	if body.City != "" {
+		city = body.City
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"id":        fmt.Sprintf("connection-%d", connectionNumber),

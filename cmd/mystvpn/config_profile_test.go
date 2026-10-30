@@ -20,7 +20,7 @@ func TestCLIProfilesReadWrite(t *testing.T) {
 	execute := func(args ...string) commandResult { return executeCLI(args, cfg, nil) }
 	assertCommandResult(t, execute("config", "profile"), 0, "* default\n", "")
 	assertCommandResult(t, execute("config", "profile", "current"), 0, "default\n", "")
-	assertCommandResult(t, execute("config", "effective"), 0, "{\n  \"country\": \"DE\",\n  \"ip_type\": \"residential\"\n}\n", "")
+	assertCommandResult(t, execute("config", "effective"), 0, "{\n  \"city\": \"\",\n  \"country\": \"DE\",\n  \"ip_type\": \"residential\"\n}\n", "")
 	path := filepath.Join(testConfigDirectory(t), "mystvpn", "config.json")
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("reading implicit default profile created a config file")
