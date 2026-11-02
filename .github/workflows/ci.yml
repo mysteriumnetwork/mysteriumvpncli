@@ -32,7 +32,8 @@ jobs:
       - name: Check Debian packaging
         run: |
           bash -n scripts/package-deb.sh
-          shellcheck scripts/package-deb.sh
+          bash -n scripts/publish-apt.sh
+          shellcheck scripts/package-deb.sh scripts/publish-apt.sh
           python3 test/package_deb_test.py
 
   build:
@@ -118,3 +119,34 @@ jobs:
           fi
           gh release upload "$TAG" dist/* --clobber
           gh release edit "$TAG" --draft=false
+
+  publish-apt:
+    name: Publish stable Debian packages to APT
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Select stable release tags
+        id: stable
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ $TAG =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
+        if: steps.stable.outputs.publish == 'true'
+        with:
+          pattern: mystvpn-linux-*
+          merge-multiple: true
+          path: dist
+      - name: Upload packages
+        if: steps.stable.outputs.publish == 'true'
+        env:
+          APT_REPO_UPLOAD_URL: ${{ vars.APT_REPO_UPLOAD_URL || 'https://apt-upload.mysterium.network/api/packages' }}
+          APT_REPO_UPLOAD_TOKEN: ${{ secrets.APT_REPO_UPLOAD_TOKEN }}
+        run: bash scripts/publish-apt.sh dist/*.deb
