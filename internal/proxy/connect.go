@@ -19,6 +19,8 @@ type ConnectRequest struct {
 	City            string `json:"city,omitempty"`
 	IPType          IPType `json:"ip_type"`
 	OSType          string `json:"os_type"`
+	CLIVersion      string `json:"cli_version"`
+	OSVersion       string `json:"os_version"`
 	ResetConnection bool   `json:"reset_connection"`
 }
 
