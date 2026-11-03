@@ -76,6 +76,30 @@ For custom destinations and dependency details, see [Advanced setup](#advanced-s
 If you previously installed a standalone binary on an apt-based system, see
 [Switching from standalone to a Debian package](#switching-from-standalone-to-a-debian-package).
 
+### Install from the APT repository
+
+On Debian, Ubuntu, or another apt-based system, add the Mysterium repository
+and install `mystvpn`:
+
+```sh
+curl -fsSLo repository-key.asc https://repository.mysterium.network/repository-key.asc
+sudo install -d -m 0755 /etc/apt/keyrings
+sudo install -m 0644 repository-key.asc /etc/apt/keyrings/mysterium.asc
+sudo tee /etc/apt/sources.list.d/mysterium.sources >/dev/null <<'EOF'
+Types: deb
+URIs: https://repository.mysterium.network
+Suites: stable
+Components: main
+Signed-By: /etc/apt/keyrings/mysterium.asc
+EOF
+sudo apt update
+sudo apt install mystvpn
+```
+
+Once configured, the repository provides future updates through apt. If you
+previously installed a standalone binary, see
+[Switching from standalone to a Debian package](#switching-from-standalone-to-a-debian-package).
+
 ### Install a Debian package manually
 
 Download the `.deb` for your system from
@@ -269,6 +293,16 @@ Check the installed version afterward:
 mystvpn version
 ```
 
+### Update from the APT repository
+
+If you configured the [APT repository](#install-from-the-apt-repository), update
+the package with:
+
+```sh
+sudo apt update
+sudo apt install --only-upgrade mystvpn
+```
+
 ### Update a manually installed Debian package
 
 Download the newer `.deb` from
@@ -396,5 +430,5 @@ containing the archive, matching Debian package, and checksums. Extract an
 archive with `tar -xzf mystvpn-linux-<architecture>.tar.gz` to preserve the
 executable's permissions.
 
-Debian package versions omit the tag's leading `v` and use `~` for prerelease
-separators.
+Debian package versions use the release tag, stripping an optional leading `v`
+for compatibility, and use `~` for prerelease separators.
