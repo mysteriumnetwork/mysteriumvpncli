@@ -9,7 +9,7 @@ import (
 const (
 	connectEndpoint = "/connection/connect"
 	// OSTypeLinux identifies Linux clients in connection requests.
-	OSTypeLinux = "linux"
+	OSTypeLinux = "linux-cli"
 )
 
 // ConnectRequest contains the parameters required to create a proxy connection.
