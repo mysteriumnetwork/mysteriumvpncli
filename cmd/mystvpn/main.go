@@ -26,7 +26,11 @@ func main() {
 }
 
 func run(args []string, stdin *os.File, stdout, stderr io.Writer) int {
-	return runWithConfig(args, stdin, stdout, stderr, config.Load())
+	code := runWithConfig(args, stdin, stdout, stderr, config.Load())
+	if code == 0 {
+		notifyUpdate(stderr)
+	}
+	return code
 }
 
 func runWithConfig(args []string, stdin *os.File, stdout, stderr io.Writer, cfg config.Config) int {
