@@ -247,6 +247,8 @@ func establishConnection(command string, cfg config.Config, stdout, stderr io.Wr
 		City:            city,
 		IPType:          ipType,
 		OSType:          proxy.OSTypeLinux,
+		CLIVersion:      version,
+		OSVersion:       detectOSVersion(os.ReadFile),
 		ResetConnection: true,
 	})
 	if err != nil {

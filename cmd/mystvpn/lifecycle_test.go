@@ -31,8 +31,23 @@ func TestRunRefresh(t *testing.T) {
 		if got := request.Header.Get("Authorization"); got != "Bearer auth-value" {
 			t.Errorf("Authorization = %q, want stored token", got)
 		}
+		var payload map[string]json.RawMessage
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		var cliVersion, osVersion string
+		if err := json.Unmarshal(payload["cli_version"], &cliVersion); err != nil || cliVersion != version {
+			t.Errorf("cli_version = %q, error = %v; want %q", cliVersion, err, version)
+		}
+		if err := json.Unmarshal(payload["os_version"], &osVersion); err != nil || strings.TrimSpace(osVersion) == "" {
+			t.Errorf("os_version = %q, error = %v; want nonempty OS information", osVersion, err)
+		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var body proxy.ConnectRequest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		if err := json.Unmarshal(data, &body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
 		if body.PublicKey != original.PublicKey || body.Country != original.Country || string(body.IPType) != original.IPType || body.OSType != proxy.OSTypeLinux || !body.ResetConnection {
