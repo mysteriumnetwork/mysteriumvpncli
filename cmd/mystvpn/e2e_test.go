@@ -312,10 +312,15 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 
 	server.SetConnectStatus(0)
 	server.SetDisconnectStatus(http.StatusForbidden)
-	assertCommandResult(t, executeCLI([]string{"disconnect"}, cfg, runner), 1, "", "[ERROR] mystvpn disconnect: HTTP status 403 (Forbidden): access denied; check your VPN account permissions and subscription\n")
-	_ = loadEndToEndSession(t)
-	if _, err := os.Stat(session.ConfigPath); err != nil {
-		t.Errorf("config Stat() error = %v, want preserved after failed disconnect", err)
+	assertCommandResult(t, executeCLI([]string{"disconnect"}, cfg, runner), 0, "[SUCCESS] Disconnected successfully.\n", "[WARNING] mystvpn disconnect: disconnected locally, but could not confirm remote session termination; the remote session may remain active\n")
+	if _, err := os.Stat(session.ConfigPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("config Stat() error = %v, want removed after local disconnect", err)
+	}
+	if _, err := store.Load(); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("session Load() error = %v, want removed after local disconnect", err)
+	}
+	if got, want := strings.Join(runner.actions, ","), "up,down"; got != want {
+		t.Errorf("tunnel actions = %q, want %q", got, want)
 	}
 }
 

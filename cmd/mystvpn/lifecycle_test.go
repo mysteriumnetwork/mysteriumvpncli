@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -277,31 +278,93 @@ func TestLifecycleCommandsWithoutSession(t *testing.T) {
 	}
 }
 
-func TestDisconnectHTTPFailurePreservesLocalSession(t *testing.T) {
-	configureTestHome(t)
-	saveTestAuthToken(t)
-	session := saveTestSession(t)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusForbidden)
-	}))
-	defer server.Close()
-
-	cfg := config.Load()
-	cfg.APIURL = server.URL
-	runner := &recordingTunnelRunner{}
-	var stdout, stderr bytes.Buffer
-	exitCode := runDisconnect(nil, cfg, &stdout, &stderr, runner)
-
-	if exitCode != 1 || stderr.String() != "[ERROR] mystvpn disconnect: HTTP status 403 (Forbidden): access denied; check your VPN account permissions and subscription\n" {
-		t.Errorf("exit=%d stderr=%q", exitCode, stderr.String())
+func TestDisconnectRemoteFailureStillCleansUpLocally(t *testing.T) {
+	for _, command := range []string{"disconnect", "logout"} {
+		for _, failure := range []string{"forbidden", "unreachable", "timeout", "refresh timeout", "missing token", "invalid API URL", "missing public key", "already down"} {
+			t.Run(command+"/"+failure, func(t *testing.T) {
+				configureTestHome(t)
+				if failure != "missing token" {
+					saveTestAuthToken(t)
+				}
+				if failure == "refresh timeout" {
+					store, _ := auth.NewDefaultFileStore()
+					if err := store.SaveRefreshToken("refresh-value"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				session := saveTestSession(t)
+				if failure == "missing public key" {
+					session.PublicKey = ""
+					store, _ := state.NewDefaultStore()
+					if err := store.Save(session); err != nil {
+						t.Fatal(err)
+					}
+				}
+				localDown := make(chan struct{})
+				server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+					select {
+					case <-localDown:
+					default:
+						t.Error("API contacted before local tunnel teardown")
+					}
+					if failure == "timeout" || (failure == "refresh timeout" && request.URL.Path == "/oauth/token") {
+						_, _ = io.Copy(io.Discard, request.Body)
+						<-request.Context().Done()
+						return
+					}
+					if failure == "refresh timeout" {
+						writer.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					writer.WriteHeader(http.StatusForbidden)
+				}))
+				defer server.Close()
+				cfg := config.Load()
+				cfg.APIURL = server.URL
+				cfg.Timeout = 100 * time.Millisecond
+				if failure == "unreachable" {
+					server.Close()
+				}
+				if failure == "invalid API URL" {
+					cfg.APIURL = ":invalid"
+				}
+				runner := &recordingTunnelRunner{down: func(string) error {
+					close(localDown)
+					if failure == "already down" {
+						return wireguard.ErrTunnelAlreadyDown
+					}
+					return nil
+				}}
+				started := time.Now()
+				result := executeCLI([]string{command}, cfg, runner)
+				if elapsed := time.Since(started); elapsed > 2*time.Second {
+					t.Errorf("disconnect took %s, want bounded notification", elapsed)
+				}
+				wantOutput := "[SUCCESS] Disconnected successfully.\n"
+				if command == "logout" {
+					wantOutput = "[SUCCESS] Logout successful.\n"
+				}
+				assertCommandResult(t, result, 0, wantOutput, "[WARNING] mystvpn "+command+": disconnected locally, but could not confirm remote session termination; the remote session may remain active\n")
+				if got := strings.Join(runner.actions, ","); got != "down" {
+					t.Errorf("tunnel actions = %q, want down", got)
+				}
+				if _, err := os.Stat(session.ConfigPath); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("config Stat() error = %v, want removed", err)
+				}
+				store, _ := state.NewDefaultStore()
+				if _, err := store.Load(); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("session Load() error = %v, want removed", err)
+				}
+				tokenStore, _ := auth.NewDefaultFileStore()
+				_, tokenErr := tokenStore.LoadAccessToken()
+				if command == "logout" && !errors.Is(tokenErr, auth.ErrTokenNotFound) {
+					t.Errorf("token load error = %v, want removed", tokenErr)
+				} else if command == "disconnect" && failure != "missing token" && tokenErr != nil {
+					t.Errorf("token load error = %v, want preserved", tokenErr)
+				}
+			})
+		}
 	}
-	if len(runner.actions) != 0 {
-		t.Errorf("tunnel actions = %v, want none", runner.actions)
-	}
-	if _, err := os.Stat(session.ConfigPath); err != nil {
-		t.Errorf("config Stat() error = %v, want preserved", err)
-	}
-	_ = loadTestSession(t)
 }
 
 func TestDisconnectTunnelFailureIncludesConfigPath(t *testing.T) {
@@ -309,6 +372,7 @@ func TestDisconnectTunnelFailureIncludesConfigPath(t *testing.T) {
 	saveTestAuthToken(t)
 	session := saveTestSession(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		t.Error("API contacted despite failed local tunnel teardown")
 		writer.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
