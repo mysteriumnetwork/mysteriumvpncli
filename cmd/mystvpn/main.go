@@ -390,34 +390,13 @@ func runDisconnect(args []string, cfg config.Config, stdout, stderr io.Writer, t
 }
 
 func disconnectSession(command string, cfg config.Config, stderr io.Writer, tunnelRunner wireguard.TunnelRunner, sessionStore *state.Store, session state.Session) bool {
-	if strings.TrimSpace(session.PublicKey) == "" {
-		writeError(stderr, "mystvpn %s: invalid local session state\n", command)
-		return false
-	}
 	if err := wireguard.ValidateConfigPath(session.ConfigPath); err != nil {
 		writeError(stderr, "mystvpn %s: invalid local WireGuard config: %v", command, err)
 		return false
 	}
 
-	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
-	if err != nil {
-		writeError(stderr, "mystvpn %s: could not initialize the HTTP client; check the API URL and timeout", command)
-		return false
-	}
-	authService, err := newAuthService(cfg)
-	if err != nil {
-		writeRequestError(stderr, command, err)
-		return false
-	}
-	if err := authService.ConfigureClient(apiClient); err != nil {
-		writeSessionRequestError(stderr, command, err)
-		return false
-	}
-	if err := proxy.Disconnect(context.Background(), apiClient, session.PublicKey); err != nil {
-		writeSessionRequestError(stderr, command, err)
-		return false
-	}
-	if err := tunnelRunner.Down(context.Background(), session.ConfigPath); err != nil {
+	// Restore local networking before attempting any API or authentication work.
+	if err := tunnelRunner.Down(context.Background(), session.ConfigPath); err != nil && !errors.Is(err, wireguard.ErrTunnelAlreadyDown) {
 		writeTunnelCommandError(stderr, command, session.ConfigPath, err)
 		return false
 	}
@@ -428,7 +407,34 @@ func disconnectSession(command string, cfg config.Config, stderr io.Writer, tunn
 		writeError(stderr, "mystvpn %s: could not clear local session state: %v", command, errors.Join(removeErr, clearErr))
 		return false
 	}
+	if err := disconnectRemoteSession(cfg, session.PublicKey); err != nil {
+		writeMessage(stderr, "WARNING", "33", "mystvpn %s: disconnected locally, but could not confirm remote session termination; the remote session may remain active", command)
+	}
 	return true
+}
+
+// Bound the entire best-effort notification, including retries and token refresh.
+const remoteDisconnectTimeout = 5 * time.Second
+
+func disconnectRemoteSession(cfg config.Config, publicKey string) error {
+	if strings.TrimSpace(publicKey) == "" {
+		return errors.New("missing session public key")
+	}
+	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
+	if err != nil {
+		return err
+	}
+	authService, err := newAuthService(cfg)
+	if err != nil {
+		return err
+	}
+	if err := authService.ConfigureClient(apiClient); err != nil {
+		return err
+	}
+	timeout := min(cfg.Timeout, remoteDisconnectTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return proxy.Disconnect(ctx, apiClient, publicKey)
 }
 
 func acceptsNoArguments(command string, args []string, stderr io.Writer) bool {
