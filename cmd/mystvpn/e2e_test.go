@@ -27,6 +27,7 @@ func TestCLILifecycleEndToEnd(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.Load()
+	cfg.AuthorizationURL = testAuthorizationURL(t)
 	cfg.APIURL = server.APIURL()
 	runner := &endToEndTunnelRunner{}
 	var allOutput strings.Builder
@@ -141,6 +142,7 @@ func TestCLIConnectReplacesActiveSession(t *testing.T) {
 	server := mockserver.New()
 	defer server.Close()
 	cfg := config.Load()
+	cfg.AuthorizationURL = testAuthorizationURL(t)
 	cfg.APIURL = server.APIURL()
 	runner := &endToEndTunnelRunner{}
 
@@ -192,6 +194,7 @@ func TestCLILogoutDisconnectsActiveSession(t *testing.T) {
 	server := mockserver.New()
 	defer server.Close()
 	cfg := config.Load()
+	cfg.AuthorizationURL = testAuthorizationURL(t)
 	cfg.APIURL = server.APIURL()
 	runner := &endToEndTunnelRunner{}
 
@@ -232,6 +235,7 @@ func TestCLIAuthenticationFailureEndToEnd(t *testing.T) {
 	server.SetAuthStatus(401)
 
 	cfg := config.Load()
+	cfg.AuthorizationURL = testAuthorizationURL(t)
 	cfg.APIURL = server.APIURL()
 	result := executeCLI([]string{"auth"}, cfg, &endToEndTunnelRunner{})
 
@@ -250,6 +254,7 @@ func TestCLIProxyFailuresEndToEnd(t *testing.T) {
 	server := mockserver.New()
 	defer server.Close()
 	cfg := config.Load()
+	cfg.AuthorizationURL = testAuthorizationURL(t)
 	cfg.APIURL = server.APIURL()
 	runner := &endToEndTunnelRunner{}
 
@@ -364,7 +369,7 @@ func assertAuthCommandSuccess(t *testing.T, got commandResult) {
 	if err != nil {
 		t.Fatalf("parse authorization URL: %v", err)
 	}
-	if parsed.Scheme != "https" || parsed.Host != "app.mysteriumvpn.com" || parsed.Path != "/oauth/authorize" || parsed.Query().Get("response_type") != "activation_none" || parsed.Query().Get("client_id") != "cli" || parsed.Query().Get("request_id") == "" {
+	if parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Path != "/oauth/authorize" || parsed.Query().Get("response_type") != "activation_none" || parsed.Query().Get("client_id") != "cli" || parsed.Query().Get("request_id") == "" {
 		t.Errorf("authorization URL = %q, want cli activation URL", lines[1])
 	}
 }

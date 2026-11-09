@@ -398,6 +398,17 @@ go build ./cmd/mystvpn
 This creates `./mystvpn`. Running it on Linux requires the same runtime
 dependencies and privileges as a release build.
 
+Run from source with `go run ./cmd/mystvpn <command>`, for example:
+
+```sh
+MYSTVPN_DEBUG=true go run ./cmd/mystvpn status
+```
+
+Pass the package directory so Go compiles all CLI files. Running only
+`cmd/mystvpn/main.go` omits the other files and fails with undefined-symbol errors.
+
+See [domain discovery and failover](docs/failover.md) for fallback and cache behavior.
+
 ### Run tests
 
 ```sh

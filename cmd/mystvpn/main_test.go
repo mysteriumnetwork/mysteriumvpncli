@@ -140,6 +140,7 @@ func TestRunAuth(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
+	cfg.AuthorizationURL = testAuthorizationURL(t)
 	cfg.APIURL = server.URL + "/api/v1"
 	cfg.AuthPollInterval = time.Millisecond
 	cfg.AuthTimeout = time.Second
@@ -155,7 +156,7 @@ func TestRunAuth(t *testing.T) {
 		t.Fatalf("run() exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
 	wantOutput := "Open this URL in your browser to authenticate:\n" +
-		"https://app.mysteriumvpn.com/oauth/authorize?client_id=cli&request_id=" + activationID + "&response_type=activation_none\n" +
+		cfg.AuthorizationURL + "?client_id=cli&request_id=" + activationID + "&response_type=activation_none\n" +
 		"Waiting for authentication approval...\n" +
 		"[SUCCESS] Authentication successful.\n"
 	if stdout.String() != wantOutput {
@@ -203,6 +204,7 @@ func TestRunAuthTimesOutAndClearsPendingState(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
+	cfg.AuthorizationURL = testAuthorizationURL(t)
 	cfg.APIURL = server.URL + "/api/v1"
 	cfg.AuthPollInterval = 5 * time.Millisecond
 	cfg.AuthTimeout = 25 * time.Millisecond
@@ -251,6 +253,7 @@ func TestRunAuthReportsInvalidActivationAndClearsPendingState(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
+	cfg.AuthorizationURL = testAuthorizationURL(t)
 	cfg.APIURL = server.URL + "/api/v1"
 	cfg.AuthPollInterval = time.Millisecond
 	cfg.AuthTimeout = time.Second
@@ -295,6 +298,7 @@ func TestRunAuthExplainsHTTPFailureWithoutResponseBody(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cfg := config.Load()
+	cfg.AuthorizationURL = testAuthorizationURL(t)
 	cfg.APIURL = server.URL + "/api/v1"
 	exitCode := runWithConfig(
 		[]string{"auth"},

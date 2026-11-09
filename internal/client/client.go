@@ -41,6 +41,8 @@ type Client struct {
 	Debug      bool
 	Logger     *log.Logger
 
+	domainRouting
+
 	mu             sync.RWMutex
 	token          string
 	onUnauthorized func(context.Context) (string, error)
@@ -64,7 +66,7 @@ func New(baseURL string, timeout time.Duration, debug bool) (*Client, error) {
 
 	return &Client{
 		BaseURL:    baseURL,
-		HTTPClient: &http.Client{Timeout: timeout},
+		HTTPClient: &http.Client{Timeout: timeout, Transport: newTransport()},
 		Debug:      debug,
 		Logger:     log.Default(),
 		maxRetries: defaultMaxRetries,
@@ -140,6 +142,8 @@ func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, r
 		c.debugf("%s %s request body: %s", method, requestURL, encodedBody)
 	}
 
+	domains := c.newDomainAttempts(&requestURL)
+
 	retryAttempt := 0
 	requestAttempt := 0
 	refreshed := false
@@ -160,8 +164,19 @@ func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, r
 		c.debugf("%s %s (attempt %d)", method, requestURL, requestAttempt)
 		response, err := c.HTTPClient.Do(request)
 		if err != nil {
+			c.debugf("%s %s failed: %v", method, requestURL, err)
 			if ctx.Err() != nil {
 				return 0, ctx.Err()
+			}
+			domains.record(false)
+			// With discovery, move on immediately instead of spending the
+			// timeout budget repeatedly on an unreachable domain.
+			if c.Discovery != nil {
+				if domains.next(ctx) {
+					retryAttempt = 0
+					continue
+				}
+				return 0, fmt.Errorf("send request: %w", err)
 			}
 			if retryAttempt < c.maxRetries {
 				if err := c.waitForRetry(ctx, retryAttempt); err != nil {
@@ -175,6 +190,13 @@ func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, r
 
 		body, readErr := readResponseBody(response.Body)
 		if readErr != nil {
+			if ctx.Err() == nil {
+				domains.record(false)
+			}
+			if domains.next(ctx) {
+				retryAttempt = 0
+				continue
+			}
 			return response.StatusCode, readErr
 		}
 		c.debugf("%s %s returned %s", method, requestURL, response.Status)
@@ -200,6 +222,7 @@ func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, r
 			}
 		}
 
+		domains.recordStatus(response.StatusCode)
 		if shouldRetry(response.StatusCode) && retryAttempt < c.maxRetries {
 			if err := c.waitForRetry(ctx, retryAttempt); err != nil {
 				return response.StatusCode, err
@@ -207,9 +230,14 @@ func (c *Client) do(ctx context.Context, method, endpoint string, requestBody, r
 			retryAttempt++
 			continue
 		}
+		if unavailableStatus(response.StatusCode) && domains.next(ctx) {
+			retryAttempt = 0
+			continue
+		}
 		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 			return response.StatusCode, newAPIError(response.StatusCode, body)
 		}
+		domains.remember()
 		if responseBody == nil || len(body) == 0 {
 			return response.StatusCode, nil
 		}

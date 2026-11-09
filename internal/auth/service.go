@@ -89,7 +89,7 @@ func (s *Service) Start(ctx context.Context) (StartResult, error) {
 		return StartResult{}, fmt.Errorf("save pending authentication: %w", err)
 	}
 
-	statusCode, requestErr := s.client.PostWithStatusDebug(ctx, activationEndpoint, activationRequest{ID: activationID}, nil)
+	statusCode, requestErr := s.client.PostWithStatus(ctx, activationEndpoint, activationRequest{ID: activationID}, nil)
 	if requestErr != nil {
 		_ = s.store.ClearPendingAuth()
 		return StartResult{}, authError(statusCode, requestErr)
@@ -99,6 +99,11 @@ func (s *Service) Start(ctx context.Context) (StartResult, error) {
 		return StartResult{}, &HTTPStatusError{StatusCode: statusCode}
 	}
 
+	authorizationURL, err = s.client.ReachableURL(ctx, authorizationURL)
+	if err != nil {
+		_ = s.store.ClearPendingAuth()
+		return StartResult{}, fmt.Errorf("check authorization page: %w", err)
+	}
 	return StartResult{Pending: pending, AuthorizationURL: authorizationURL}, nil
 }
 

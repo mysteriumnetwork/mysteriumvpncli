@@ -154,6 +154,7 @@ func TestCLIConnectDefaultsAndOverrides(t *testing.T) {
 			server := mockserver.New()
 			defer server.Close()
 			cfg := config.Load()
+			cfg.AuthorizationURL = testAuthorizationURL(t)
 			cfg.APIURL = server.APIURL()
 			runner := &endToEndTunnelRunner{}
 			assertAuthCommandSuccess(t, executeCLI([]string{"auth"}, cfg, runner))
@@ -183,6 +184,7 @@ func TestCLIConfigDefaultsLifecycle(t *testing.T) {
 	server := mockserver.New()
 	defer server.Close()
 	cfg := config.Load()
+	cfg.AuthorizationURL = testAuthorizationURL(t)
 	cfg.APIURL = server.APIURL()
 	runner := &endToEndTunnelRunner{}
 	execute := func(args ...string) commandResult { return executeCLI(args, cfg, runner) }

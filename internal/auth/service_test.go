@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -271,6 +272,13 @@ func newTestService(t *testing.T, authURL string, store CredentialStore) *Servic
 	if err != nil {
 		t.Fatalf("client.New() error = %v", err)
 	}
+	transport := authClient.HTTPClient.Transport
+	authClient.HTTPClient.Transport = authTestTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Hostname() == "app.mysteriumvpn.com" {
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"OK"}`)), Header: make(http.Header)}, nil
+		}
+		return transport.RoundTrip(r)
+	})
 	return NewService(authClient, store, Options{
 		ClientID:           "cli",
 		ActivationClientID: "cli",

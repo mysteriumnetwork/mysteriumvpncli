@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/auth"
-	"github.com/mysteriumnetwork/mysteriumvpncli/internal/client"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/config"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/proxy"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/state"
@@ -218,7 +217,7 @@ func runRefresh(args []string, cfg config.Config, stdout, stderr io.Writer, tunn
 }
 
 func establishConnection(command string, cfg config.Config, stdout, stderr io.Writer, tunnelRunner wireguard.TunnelRunner, sessionStore *state.Store, activeSession *state.Session, keyPair wireguard.KeyPair, country, city string, ipType proxy.IPType) int {
-	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
+	apiClient, err := newAPIClient(cfg)
 	if err != nil {
 		writeError(stderr, "mystvpn %s: could not initialize the HTTP client; check the API URL and timeout", command)
 		return 1
@@ -420,7 +419,7 @@ func disconnectRemoteSession(cfg config.Config, publicKey string) error {
 	if strings.TrimSpace(publicKey) == "" {
 		return errors.New("missing session public key")
 	}
-	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
+	apiClient, err := newAPIClient(cfg)
 	if err != nil {
 		return err
 	}
@@ -541,7 +540,7 @@ func runLocationListing(command string, args []string, cfg config.Config, stdout
 		}
 	}
 
-	apiClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
+	apiClient, err := newAPIClient(cfg)
 	if err != nil {
 		writeRequestError(stderr, command, err)
 		return 1
@@ -672,7 +671,7 @@ func newAuthService(cfg config.Config) (*auth.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	authClient, err := client.New(cfg.APIURL, cfg.Timeout, cfg.Debug)
+	authClient, err := newAPIClient(cfg)
 	if err != nil {
 		return nil, err
 	}
