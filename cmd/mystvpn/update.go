@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/mysteriumnetwork/mysteriumvpncli/internal/config"
 	"github.com/mysteriumnetwork/mysteriumvpncli/internal/update"
 	"golang.org/x/term"
 )
@@ -26,9 +29,17 @@ func notifyUpdate(stderr io.Writer) {
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	notifier := update.Notifier{Path: filepath.Join(directory, "mystvpn", "update.json")}
+	publicClient, err := newAPIClient(config.Load())
+	if err != nil {
+		return
+	}
+	// Bound DNS/TCP dialing explicitly for this optional update check.
+	transport := publicClient.HTTPClient.Transport.(*http.Transport)
+	transport.DialContext = (&net.Dialer{Timeout: 500 * time.Millisecond, KeepAlive: 30 * time.Second}).DialContext
+	publicClient.HTTPClient.Timeout = 500 * time.Millisecond
+	notifier := update.Notifier{Path: filepath.Join(directory, "mystvpn", "update.json"), Client: publicClient}
 	latest := notifier.Check(ctx, version)
 	if latest == "" {
 		return

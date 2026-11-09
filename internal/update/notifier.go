@@ -21,9 +21,11 @@ const interval = 24 * time.Hour
 // Client and URL may be supplied for testing; defaults use the public GitHub API.
 type Notifier struct {
 	Path   string
-	Client *http.Client
-	URL    string
-	Now    func() time.Time
+	Client interface {
+		Do(*http.Request) (*http.Response, error)
+	}
+	URL string
+	Now func() time.Time
 }
 
 type cache struct {
