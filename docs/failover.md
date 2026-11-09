@@ -37,3 +37,15 @@ fail, cooling-down hosts are still tried as a recovery path. This does not
 require a public-IP lookup and adapts when the network changes.
 Delete this file to reset availability preferences. Corrupt or unwritable state
 does not prevent requests; cached hosts are only used if still present in discovery.
+
+## Update notifications
+
+Release notifications use domain discovery for `api.github.com`, sharing the
+availability cache with other CLI requests. They send public GitHub headers and
+omit the CLI's API bearer token. DNS/TCP dialing and each request attempt have
+a 500 ms timeout, with a 2-second overall cap covering discovery and fallback
+attempts. Discovery must publish working replacement domains serving the same
+GitHub release metadata API paths.
+
+`repository.mysterium.network` is an optional APT distribution channel. CLI
+authentication, connection, and update notifications work independently of it.

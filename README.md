@@ -443,3 +443,16 @@ executable's permissions.
 
 Debian package versions use the release tag, stripping an optional leading `v`
 for compatibility, and use `~` for prerelease separators.
+
+### Update notification failover
+
+The CLI update notifier uses the same discovery configuration and domain
+availability cache as API requests. Its public release requests do not attach
+VPN API credentials. DNS/TCP dialing and each request attempt have a 500 ms
+timeout. A 2-second overall cap covers discovery and fallback attempts.
+Unavailable checks skip silently.
+
+Automatic failover requires discovery to publish a working replacement for
+`api.github.com` serving the same release metadata API paths.
+`repository.mysterium.network` is an optional APT distribution channel and is
+not required for CLI authentication, connection, or update notifications.
