@@ -100,6 +100,46 @@ Once configured, the repository provides future updates through apt. If you
 previously installed a standalone binary, see
 [Switching from standalone to a Debian package](#switching-from-standalone-to-a-debian-package).
 
+### Install from the Arch Linux repository
+
+On Arch Linux **x86_64**, the package and command are both named `mystvpn`.
+Download the repository key and verify that its full fingerprint is
+`F979027FD871A8BCC935CBF3350BCB79ADB738C2` before trusting it:
+
+```sh
+curl -fsSLo repository-key.asc https://repository.mysterium.network/repository-key.asc
+gpg --show-keys --with-fingerprint repository-key.asc
+sudo pacman-key --init
+sudo pacman-key --add repository-key.asc
+sudo pacman-key --lsign-key F979027FD871A8BCC935CBF3350BCB79ADB738C2
+```
+
+Add this section once to `/etc/pacman.conf`, keeping the literal `$arch`:
+
+```ini
+[mysterium]
+SigLevel = Required TrustedOnly
+Server = https://repository.mysterium.network/arch/stable/$arch
+```
+
+Install the package and update the system together:
+
+```sh
+sudo pacman -Syu mystvpn
+```
+
+The package installs `/usr/bin/mystvpn` and declares its runtime dependencies.
+Future versions arrive through `sudo pacman -Syu`. If you previously installed a
+standalone binary, remove `/usr/local/bin/mystvpn` after installing the package,
+then run `hash -r` so your shell finds the packaged executable. Existing user
+configuration and authentication state stay in place.
+
+For a manual package installation, download `mystvpn-<version>-1-x86_64.pkg.tar.zst`
+and its `.sha256` from [GitHub Releases](https://github.com/mysteriumnetwork/mysteriumvpncli/releases),
+verify the checksum, then install with `sudo pacman -U ./<downloaded-filename>`.
+Use the repository for signature-verified distribution and automatic upgrades.
+Arch Linux ARM packages are not currently built.
+
 ### Install a Debian package manually
 
 Download the `.deb` for your system from
@@ -303,6 +343,19 @@ sudo apt update
 sudo apt install --only-upgrade mystvpn
 ```
 
+### Update an Arch Linux package
+
+With the [pacman repository](#install-from-the-arch-linux-repository) configured:
+
+```sh
+sudo pacman -Syu
+```
+
+For a manually installed Arch package, download the newer `.pkg.tar.zst`, verify
+its checksum, and install it with `sudo pacman -U ./<downloaded-filename>`.
+Use pacman for packaged installations; the automatic installer uses the standalone
+binary on Arch.
+
 ### Update a manually installed Debian package
 
 Download the newer `.deb` from
@@ -362,7 +415,8 @@ The installer does not change or upgrade the kernel.
 | HTTPS downloads | `curl` and CA certificates |
 | Standalone archive installation | Bash, `tar`, `gzip`, and `coreutils` |
 
-The Debian package declares its runtime dependencies so apt can install them.
+The Debian and Arch packages declare their runtime dependencies so apt or pacman
+can install them.
 For standalone installation, the installer checks for required commands and
 installs missing packages using `apt-get`, `dnf`, `yum`, `pacman`, or `zypper`.
 On other distributions, install missing dependencies manually and rerun it.
@@ -432,14 +486,19 @@ and packaging tests for every pull request. Pushing any tag runs those checks,
 then builds Linux binaries for amd64, arm32 (ARMv7), and arm64 with CGO disabled.
 The tag is embedded in `mystvpn version`.
 
-After all builds succeed, CI publishes release archives, Debian packages, and
-their `.sha256` files. New releases remain drafts until all assets have been
+The x86_64 Arch job uses `makepkg` to package the tested static amd64 binary
+without modifying it, then installs the package in Arch Linux and checks its
+embedded version.
+
+After all builds succeed, CI publishes release archives, Debian and Arch packages,
+and their `.sha256` files. New releases remain drafts until all assets have been
 uploaded. The installer downloads packages from the latest release.
 
 Each tagged workflow also provides a `mystvpn-linux-<architecture>` artifact
 containing the archive, matching Debian package, and checksums. Extract an
 archive with `tar -xzf mystvpn-linux-<architecture>.tar.gz` to preserve the
-executable's permissions.
+executable's permissions. A separate `mystvpn-linux-arch-x86_64` artifact contains
+the Arch package and its checksum.
 
 Debian package versions use the release tag, stripping an optional leading `v`
 for compatibility, and use `~` for prerelease separators.
@@ -454,5 +513,6 @@ Unavailable checks skip silently.
 
 Automatic failover requires discovery to publish a working replacement for
 `api.github.com` serving the same release metadata API paths.
-`repository.mysterium.network` is an optional APT distribution channel and is
-not required for CLI authentication, connection, or update notifications.
+`repository.mysterium.network` is an optional APT and pacman distribution
+channel and is not required for CLI authentication, connection, or update
+notifications.
