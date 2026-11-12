@@ -35,11 +35,31 @@ jobs:
           bash -n scripts/publish-apt.sh
           shellcheck scripts/package-deb.sh scripts/publish-apt.sh
           python3 test/package_deb_test.py
+      - name: Check Arch packaging scripts
+        run: |
+          for script in packaging/arch/PKGBUILD scripts/package-arch.sh scripts/publish-arch.sh scripts/ci-arch.sh; do
+            bash -n "$script"
+          done
+          shellcheck scripts/package-arch.sh scripts/publish-arch.sh scripts/ci-arch.sh
+
+  arch-test:
+    name: Test Arch Linux packaging
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Build, install, and upgrade packages on Arch Linux
+        run: |
+          docker run --rm --platform linux/amd64 \
+            --mount "type=bind,src=$PWD,dst=/src,readonly" \
+            archlinux:base-devel bash /src/scripts/ci-arch.sh test
 
   build:
     name: Build Linux ${{ matrix.arch }}
     if: startsWith(github.ref, 'refs/tags/')
-    needs: test
+    needs: [test, arch-test]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -93,9 +113,38 @@ jobs:
             dist/*.deb*
           if-no-files-found: error
 
+  build-arch:
+    name: Build Arch Linux x86_64 package
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: mystvpn-linux-amd64
+          path: artifacts
+      - name: Package and smoke test on Arch Linux
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          docker run --rm --platform linux/amd64 --env VERSION \
+            --mount "type=bind,src=$PWD,dst=/src,readonly" \
+            --mount "type=bind,src=$PWD/artifacts,dst=/artifacts,readonly" \
+            --mount "type=bind,src=$PWD/dist,dst=/out" \
+            archlinux:base-devel bash /src/scripts/ci-arch.sh release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mystvpn-linux-arch-x86_64
+          path: dist/*.pkg.tar.zst*
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: build
+    needs: [build, build-arch]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -150,3 +199,33 @@ jobs:
           APT_REPO_UPLOAD_URL: ${{ vars.APT_REPO_UPLOAD_URL || 'https://apt-upload.mysterium.network/api/packages' }}
           APT_REPO_UPLOAD_TOKEN: ${{ secrets.APT_REPO_UPLOAD_TOKEN }}
         run: bash scripts/publish-apt.sh dist/*.deb
+
+  publish-arch:
+    name: Publish stable Arch packages to pacman repository
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Select stable release tags
+        id: stable
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ $TAG =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
+        if: steps.stable.outputs.publish == 'true'
+        with:
+          name: mystvpn-linux-arch-x86_64
+          path: dist
+      - name: Publish Arch packages to repository
+        if: steps.stable.outputs.publish == 'true'
+        env:
+          ARCH_REPO_UPLOAD_URL: ${{ vars.ARCH_REPO_UPLOAD_URL || 'https://apt-upload.mysterium.network/api/arch/packages' }}
+          ARCH_REPO_UPLOAD_TOKEN: ${{ secrets.ARCH_REPO_UPLOAD_TOKEN || secrets.APT_REPO_UPLOAD_TOKEN }}
+        run: bash scripts/publish-arch.sh dist/*.pkg.tar.zst

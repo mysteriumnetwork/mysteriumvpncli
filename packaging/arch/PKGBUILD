@@ -1,0 +1,18 @@
+# Package the static Linux binary built and tested by the release workflow.
+pkgname=mystvpn
+pkgver=${MYSTVPN_PKGVER:?Set MYSTVPN_PKGVER using scripts/package-arch.sh}
+pkgrel=${MYSTVPN_PKGREL:-1}
+pkgdesc='Mysterium VPN command-line client'
+arch=('x86_64')
+url='https://github.com/mysteriumnetwork/mysteriumvpncli'
+license=('GPL-2.0-only')
+depends=('ca-certificates' 'wireguard-tools' 'iproute2' 'procps-ng' 'openresolv' 'nftables')
+# The Go linker already strips the binary. Preserve the tested release bytes.
+options=('!strip' '!debug')
+source=('mystvpn' 'LICENSE')
+sha256sums=("${MYSTVPN_BINARY_SHA256:?}" "${MYSTVPN_LICENSE_SHA256:?}")
+
+package() {
+    install -Dm755 "$srcdir/mystvpn" "$pkgdir/usr/bin/mystvpn"
+    install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/mystvpn/LICENSE"
+}
