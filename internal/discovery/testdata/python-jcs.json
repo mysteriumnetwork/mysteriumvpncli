@@ -1,0 +1,50 @@
+{
+  "test_key_base64": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "canonical_base64": "eyJleHBpcmVzX2F0IjoiMjA5OS0wMS0wMVQwMDowMDowMFoiLCJpc3N1ZWRfYXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwWiIsImpjc192ZWN0b3JzIjp7ImVzY2FwaW5nIjoiXHUwMDAwXGJcdFxuXGZcclwiXFwv4oCo4oCpPD4mIiwibnVtYmVycyI6WzMzMzMzMzMzMy4zMzMzMzMzLDFlKzMwLDQuNSwwLjAwMiwxZS0yNywwLDAuMDAwMDAxLDFlLTcsOTAwNzE5OTI1NDc0MDk5Ml0sInVuaWNvZGUiOnsiXHIiOiJDUiIsIjEiOiJvbmUiLCLCgCI6ImNvbnRyb2wiLCLDtiI6Im8iLCLigqwiOiJldXJvIiwi8J+YgCI6InNtaWxlIiwi76yzIjoibGV0dGVyIn19LCJtYXBwaW5ncyI6eyJhcGkubXlzdGVyaXVtdnBuLmNvbSI6WyJ1bmJsb2NrZWQtYXBpLm15c3Rlcml1bXZwbi5jb20iXSwiYXBwLm15c3Rlcml1bXZwbi5jb20iOlsidW5ibG9ja2VkLWFwcC5teXN0ZXJpdW12cG4uY29tIl19LCJzY2hlbWFfdmVyc2lvbiI6MSwidmVyc2lvbiI6MX0=",
+  "envelope": {
+    "signed": {
+      "schema_version": 1,
+      "version": 1,
+      "issued_at": "2026-01-01T00:00:00Z",
+      "expires_at": "2099-01-01T00:00:00Z",
+      "mappings": {
+        "api.mysteriumvpn.com": [
+          "unblocked-api.mysteriumvpn.com"
+        ],
+        "app.mysteriumvpn.com": [
+          "unblocked-app.mysteriumvpn.com"
+        ]
+      },
+      "jcs_vectors": {
+        "numbers": [
+          333333333.3333333,
+          1e+30,
+          4.5,
+          0.002,
+          1e-27,
+          -0.0,
+          1e-06,
+          1e-07,
+          9007199254740992.0
+        ],
+        "unicode": {
+          "\r": "CR",
+          "1": "one",
+          "": "control",
+          "ö": "o",
+          "€": "euro",
+          "😀": "smile",
+          "דּ": "letter"
+        },
+        "escaping": "\u0000\b\t\n\f\r\"\\/  <>&"
+      }
+    },
+    "signatures": [
+      {
+        "key_id": "test-discovery",
+        "alg": "Ed25519",
+        "sig": "1JtuCsoj3KorjuRUZfYLpS8ESFcUwh3fwH6+sjAiPzP0iqRlGwn0NINVP7mUbtrcUdkJ1Q3b6Kt7DItRnuFiDw=="
+      }
+    ]
+  }
+}

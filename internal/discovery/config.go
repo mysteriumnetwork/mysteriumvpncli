@@ -24,7 +24,7 @@ var DefaultSources = []string{
 	"https://raw.githubusercontent.com/static-resources-hub/static-resources-hub.github.io/main/config.json",
 }
 
-// Config is the discovery envelope. Signatures are intentionally ignored for now.
+// Config contains a verified discovery payload.
 type Config struct {
 	Signed SignedConfig `json:"signed"`
 }
@@ -38,14 +38,21 @@ type SignedConfig struct {
 	Mappings      map[string][]string `json:"mappings"`
 }
 
-// Parse validates the envelope and supported schema while allowing future fields.
-// Expired configurations remain usable for offline recovery.
+// Parse verifies the signature before validating schema and expiration.
 func Parse(data []byte) (Config, error) {
+	return parse(data, trustedKeys, false)
+}
+
+func parse(data []byte, keys map[string]string, allowExpired bool) (Config, error) {
 	var cfg Config
 	if len(data) > maxConfigSize {
 		return cfg, errors.New("discovery config exceeds 1 MiB limit")
 	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	payload, err := verifiedPayload(data, keys)
+	if err != nil {
+		return cfg, err
+	}
+	if err := json.Unmarshal(payload, &cfg.Signed); err != nil {
 		return cfg, fmt.Errorf("decode discovery config: %w", err)
 	}
 	s := cfg.Signed
@@ -54,6 +61,9 @@ func Parse(data []byte) (Config, error) {
 	}
 	if s.Version < 1 || s.IssuedAt.IsZero() || !s.ExpiresAt.After(s.IssuedAt) || s.Mappings == nil {
 		return cfg, errors.New("incomplete discovery config")
+	}
+	if !allowExpired && !time.Now().Before(s.ExpiresAt) {
+		return cfg, errors.New("discovery configuration has expired")
 	}
 	for host, alternatives := range s.Mappings {
 		if !validDomain(host) || len(alternatives) == 0 {
@@ -96,11 +106,12 @@ type Loader struct {
 	config          Config
 	loaded          bool
 	lastAttempt     time.Time
+	keys            map[string]string
 }
 
 // New creates a loader. An empty cache path disables persistence.
 func New(cachePath string) *Loader {
-	return &Loader{Sources: append([]string(nil), DefaultSources...), HTTPClient: &http.Client{Timeout: 3 * time.Second}, CachePath: cachePath, RefreshInterval: time.Hour}
+	return &Loader{Sources: append([]string(nil), DefaultSources...), HTTPClient: &http.Client{Timeout: 3 * time.Second}, CachePath: cachePath, RefreshInterval: time.Hour, keys: trustedKeys}
 }
 
 // NewDefault stores discovery data alongside the application's configuration.
@@ -148,7 +159,7 @@ func (l *Loader) loadCache() {
 	if !l.loaded {
 		l.loaded = true
 		if data, err := os.ReadFile(l.CachePath); err == nil {
-			if cfg, err := Parse(data); err == nil {
+			if cfg, err := parse(data, l.keys, true); err == nil {
 				l.config = cfg
 				if info, err := os.Stat(l.CachePath); err == nil && time.Now().Before(cfg.Signed.ExpiresAt) {
 					l.lastAttempt = info.ModTime()
@@ -173,7 +184,7 @@ func (l *Loader) refresh(ctx context.Context) {
 		if response.StatusCode != http.StatusOK || readErr != nil {
 			continue
 		}
-		cfg, err := Parse(data)
+		cfg, err := parse(data, l.keys, false)
 		if err != nil {
 			continue
 		}
