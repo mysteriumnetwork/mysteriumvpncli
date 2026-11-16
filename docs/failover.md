@@ -16,8 +16,13 @@ not trigger domain discovery.
 Discovery loads `https://static-resources-hub.github.io/config.json`, falling back
 to `https://raw.githubusercontent.com/static-resources-hub/static-resources-hub.github.io/main/config.json`
 if fetching or validation fails, with a 3-second timeout per discovery source.
-The loader accepts schema version 1 and validates
-required metadata and domain mappings. Signatures are ignored for now.
+The loader requires an Ed25519 signature over the RFC 8785 (JCS) canonical form
+of the `signed` object. It trusts the bundled key `discovery-2026-11`; discovery
+sources cannot supply public keys. At least one signature must verify against a
+bundled key before schema version 1, metadata, expiration, and domain validation.
+Unsigned configurations and older unsigned caches are rejected. Newly fetched
+expired configurations are rejected; an authentic expired cache remains usable
+for offline recovery under the existing cache policy.
 
 The last valid configuration is stored atomically in `mystvpn/discovery.json`
 inside the user's configuration directory. Discovery refreshes on demand during

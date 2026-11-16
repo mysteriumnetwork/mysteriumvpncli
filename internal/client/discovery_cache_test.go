@@ -24,42 +24,53 @@ func TestHealthyEndpointsDoNotRefreshDiscovery(t *testing.T) {
 				directory := t.TempDir()
 				cachePath := filepath.Join(directory, "discovery.json")
 				statePath := filepath.Join(directory, "domain-state.json")
-				const config = `{"signed":{"schema_version":1,"version":1,"issued_at":"2000-01-01T00:00:00Z","expires_at":"2000-02-01T00:00:00Z","mappings":{"primary.example.com":["first.example.com","second.example.com"]}}}`
-				if err := os.WriteFile(cachePath, []byte(config), 0600); err != nil {
+				config, err := os.ReadFile("../discovery/testdata/production.json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				primary, first, second := "api.mysteriumvpn.com", "unblocked-api.mysteriumvpn.com", "api.mysterium.network"
+				if app {
+					primary, first, second = "app.mysteriumvpn.com", "unblocked-app.mysteriumvpn.com", "app.mysterium.network"
+				}
+				if err := os.WriteFile(cachePath, config, 0600); err != nil {
+					t.Fatal(err)
+				}
+				old := time.Now().Add(-2 * time.Hour)
+				if err := os.Chtimes(cachePath, old, old); err != nil {
 					t.Fatal(err)
 				}
 				var sourceCalls atomic.Int32
 				source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					sourceCalls.Add(1)
-					fmt.Fprint(w, config)
+					_, _ = w.Write(config)
 				}))
 				defer source.Close()
-				working := "primary.example.com"
+				working := primary
 				state := NewDomainState(statePath)
 				if fallback {
-					state.record("https://primary.example.com", working, false)
-					working = "first.example.com"
+					state.record("https://"+primary, working, false)
+					working = first
 				}
-				state.record("https://primary.example.com", working, true)
+				state.record("https://"+primary, working, true)
 				request := func(fail bool) {
 					t.Helper()
 					// Simulate a new invocation with both caches reloaded from disk.
 					loader := discovery.New(cachePath)
 					loader.Sources = []string{source.URL}
-					c, _ := New("https://primary.example.com/api/v1", time.Second, false)
+					c, _ := New("https://"+primary+"/api/v1", time.Second, false)
 					c.Discovery = loader
 					c.DomainState = NewDomainState(statePath)
 					var attempts []string
 					c.HTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 						attempts = append(attempts, r.URL.Hostname())
-						if fail && r.URL.Hostname() != "second.example.com" {
+						if fail && r.URL.Hostname() != second {
 							return nil, errors.New("offline")
 						}
 						return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"status":"OK"}`))}, nil
 					})
 					var err error
 					if app {
-						_, err = c.ReachableURL(context.Background(), "https://primary.example.com/oauth/authorize")
+						_, err = c.ReachableURL(context.Background(), "https://"+primary+"/oauth/authorize")
 					} else {
 						err = c.Get(context.Background(), "resource", nil)
 					}

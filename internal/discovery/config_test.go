@@ -14,7 +14,9 @@ import (
 	"time"
 )
 
-const sample = `{"signed":{"schema_version":1,"version":1,"issued_at":"2026-10-27T00:00:00Z","expires_at":"2099-11-10T00:00:00Z","mappings":{"app.mysteriumvpn.com":["unblocked-app.mysteriumvpn.com","app.mysterium.network"]}},"signatures":[]}`
+const unsignedSample = `{"signed":{"schema_version":1,"version":1,"issued_at":"2026-10-27T00:00:00Z","expires_at":"2099-11-10T00:00:00Z","mappings":{"app.mysteriumvpn.com":["unblocked-app.mysteriumvpn.com","app.mysterium.network"]}},"signatures":[]}`
+
+var sample = signTestEnvelope(unsignedSample)
 
 func TestParse(t *testing.T) {
 	for _, tt := range []struct {
@@ -22,7 +24,7 @@ func TestParse(t *testing.T) {
 		valid      bool
 	}{
 		{"valid", sample, true},
-		{"ignored signatures", strings.Replace(sample, `"signatures":[]`, `"signatures":{"future":true}`, 1), true},
+		{"unsigned", unsignedSample, false},
 		{"missing envelope", `{}`, false},
 		{"null", `null`, false},
 		{"unsupported schema", strings.Replace(sample, `"schema_version":1`, `"schema_version":2`, 1), false},
@@ -36,7 +38,7 @@ func TestParse(t *testing.T) {
 		{"too large", strings.Repeat(" ", maxConfigSize+1), false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Parse([]byte(tt.data))
+			_, err := parse([]byte(tt.data), testKeys(), false)
 			if (err == nil) != tt.valid {
 				t.Fatalf("Parse() error = %v, valid = %v", err, tt.valid)
 			}
@@ -62,7 +64,7 @@ func TestLoaderRefreshAndCache(t *testing.T) {
 	}))
 	defer mirror.Close()
 	path := filepath.Join(t.TempDir(), "discovery.json")
-	loader := New(path)
+	loader := newTestLoader(path)
 	loader.Sources = []string{primary.URL, mirror.URL}
 	check := func(l *Loader) {
 		t.Helper()
@@ -85,7 +87,7 @@ func TestLoaderRefreshAndCache(t *testing.T) {
 		t.Fatalf("cache mode = %v", info.Mode())
 	}
 	// A new process uses a recent cache without accessing discovery sources.
-	restarted := New(path)
+	restarted := newTestLoader(path)
 	restarted.Sources = loader.Sources
 	check(restarted)
 	if mirrorCalls.Load() != 1 {
@@ -112,7 +114,7 @@ func TestPrimarySuccessAndInvalidCache(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	loader := New(path)
+	loader := newTestLoader(path)
 	loader.Sources = []string{server.URL, "http://invalid.invalid"}
 	if got := loader.Fallbacks(context.Background(), "unknown.example.com"); len(got) != 0 {
 		t.Fatalf("unexpected alternatives: %v", got)
@@ -134,7 +136,7 @@ func TestConcurrentFallbacks(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); fmt.Fprint(w, sample) }))
 	defer server.Close()
-	loader := New("")
+	loader := newTestLoader("")
 	loader.Sources = []string{server.URL}
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -158,13 +160,14 @@ func TestExpiredCacheSurvivesUnavailableSources(t *testing.T) {
 	// These dates are in the past regardless of the machine's current date.
 	expired = strings.Replace(expired, "2026-10-27T00:00:00Z", "2000-10-27T00:00:00Z", 1)
 	expired = strings.Replace(expired, "2026-11-10T00:00:00Z", "2000-11-10T00:00:00Z", 1)
+	expired = signTestEnvelope(expired)
 	if err := os.WriteFile(path, []byte(expired), 0600); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; http.Error(w, "unavailable", 503) }))
 	defer server.Close()
-	loader := New(path)
+	loader := newTestLoader(path)
 	loader.Sources = []string{server.URL, server.URL}
 	if got := loader.Fallbacks(context.Background(), "app.mysteriumvpn.com"); len(got) != 2 {
 		t.Fatalf("stale alternatives = %v", got)
@@ -185,6 +188,7 @@ func TestCachedFallbacksNeverRefresh(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "discovery.json")
 	expired := strings.Replace(sample, "2026-10-27T00:00:00Z", "2000-01-01T00:00:00Z", 1)
 	expired = strings.Replace(expired, "2099-11-10T00:00:00Z", "2000-02-01T00:00:00Z", 1)
+	expired = signTestEnvelope(expired)
 	if err := os.WriteFile(path, []byte(expired), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +198,7 @@ func TestCachedFallbacksNeverRefresh(t *testing.T) {
 		fmt.Fprint(w, sample)
 	}))
 	defer source.Close()
-	loader := New(path)
+	loader := newTestLoader(path)
 	loader.Sources = []string{source.URL}
 	for i := 0; i < 2; i++ {
 		got := loader.CachedFallbacks("app.mysteriumvpn.com")

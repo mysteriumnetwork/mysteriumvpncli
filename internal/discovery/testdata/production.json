@@ -1,0 +1,29 @@
+{
+  "signed": {
+    "schema_version": 1,
+    "version": 2,
+    "issued_at": "2026-11-16T00:00:00Z",
+    "expires_at": "2027-03-01T00:00:00Z",
+    "mappings": {
+      "app.mysteriumvpn.com": [
+        "unblocked-app.mysteriumvpn.com",
+        "app.mysterium.network"
+      ],
+      "dashboard.mysteriumvpn.com": [
+        "unblocked-dashboard.mysteriumvpn.com",
+        "app-dashboard.mysterium.network"
+      ],
+      "api.mysteriumvpn.com": [
+        "unblocked-api.mysteriumvpn.com",
+        "api.mysterium.network"
+      ]
+    }
+  },
+  "signatures": [
+    {
+      "key_id": "discovery-2026-11",
+      "alg": "Ed25519",
+      "sig": "oQaCzGoI7Or+5f1RIZYYlocZvnvWmKO3+EDrtgkx2/kF63iLFFkrM92N7EypevF5Ig/uZvS2JjHAF7Z1RrOLAw=="
+    }
+  ]
+}
